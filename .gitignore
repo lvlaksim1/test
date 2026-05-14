@@ -1,0 +1,10 @@
+*.tmp
+*.log
+*.xlsm~
+*.xls~
+*.docm~
+*.accdb~
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
