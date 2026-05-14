@@ -1,10 +1,1 @@
-*.tmp
-*.log
-*.xlsm~
-*.xls~
-*.docm~
-*.accdb~
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
+Nothing should be ignored in this case, as the only change is adding a VBA source file (.bas), which is source code and not a build artifact, dependency, or temporary file.
