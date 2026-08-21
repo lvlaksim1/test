@@ -30,6 +30,7 @@ class TimeAccessibilityService : AccessibilityService() {
     private var settingsLaunchRequested = false
     private var textModeRequested = false
     private var automaticToggleGestureAttempted = false
+    private var shizukuCommandInFlight = false
     private val diagnosticKeys = mutableSetOf<String>()
     private val traceKeys = mutableSetOf<String>()
     private var calendarDateMode = CalendarDateMode.NONE
@@ -85,6 +86,7 @@ class TimeAccessibilityService : AccessibilityService() {
         settingsLaunchRequested = false
         textModeRequested = false
         automaticToggleGestureAttempted = false
+        shizukuCommandInFlight = false
         diagnosticKeys.clear()
         traceKeys.clear()
         calendarDateMode = CalendarDateMode.NONE
@@ -103,7 +105,7 @@ class TimeAccessibilityService : AccessibilityService() {
         } else {
             @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
         }
-        return "Сборка ${packageInfo.versionName} ($code), MIUI-CONFIRM-20260821-3."
+        return "Сборка ${packageInfo.versionName} ($code), SHIZUKU-20260821-1."
     }
 
     private fun returnToApp(note: String) {
@@ -125,14 +127,21 @@ class TimeAccessibilityService : AccessibilityService() {
             stopWithFailure("Не удалось завершить ручной ввод за отведенное время. Цикл остановлен, чтобы не открывать настройки повторно.")
             return
         }
-
-        when (stage) {
-            Stage.OPEN_SETTINGS -> openSettingsAndPrepare()
-            Stage.OPEN_DATE_DIALOG -> fillDateDialog()
-            Stage.OPEN_TIME -> openTimeDialog()
-            Stage.OPEN_TIME_DIALOG -> fillTimeDialog()
-            Stage.VERIFY -> verifyAppliedTime()
-            Stage.IDLE -> Unit
+        if (shizukuCommandInFlight) return
+        if (!TimeShizukuController.state().isPermissionGranted) {
+            stopWithFailure("Shizuku не запущен или доступ к нему не выдан. Откройте Shizuku, запустите службу и разрешите доступ приложению.")
+            return
+        }
+        shizukuCommandInFlight = true
+        trace("shizuku.apply", "Прямое изменение системной даты и времени через Shizuku.")
+        TimeShizukuController.applyTime(this, targetMillis) { outcome ->
+            shizukuCommandInFlight = false
+            if (!TimeCycleStore.isRunning(this)) return@applyTime
+            if (outcome.isSuccess) {
+                finishAttempt(true, "Shizuku: ${outcome.detail}")
+            } else {
+                stopWithFailure("Shizuku не применил системное время. ${outcome.detail}")
+            }
         }
     }
 

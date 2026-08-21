@@ -24,7 +24,7 @@ import {
   getAccessibilityStatus,
   isNativeAccessibilityAvailable,
   openAccessibilitySettings,
-  openTimeSynchronizationSettings,
+  requestShizukuPermission,
   startAccessibilityCycle,
   stopAccessibilityCycle,
   type AccessibilityStatus,
@@ -34,6 +34,8 @@ const FORM_STORAGE_KEY = "time-cycler-form-v1";
 
 const initialStatus: AccessibilityStatus = {
   isAccessibilityEnabled: false,
+  isShizukuRunning: false,
+  isShizukuPermissionGranted: false,
   isRunning: false,
   completedCycles: 0,
   totalCycles: 0,
@@ -105,6 +107,7 @@ export default function HomeScreen() {
 
   const parsed = useMemo(() => parseCycleForm(form), [form]);
   const enabled = status.isAccessibilityEnabled;
+  const shizukuReady = status.isShizukuRunning && status.isShizukuPermissionGranted;
   const running = status.isRunning;
 
   const updateField = (field: keyof CycleForm) => (value: string) => {
@@ -123,17 +126,25 @@ export default function HomeScreen() {
     }
   };
 
-  const handleOpenTimeSyncSettings = async () => {
+  const handleRequestShizuku = async () => {
     try {
-      await openTimeSynchronizationSettings();
+      const granted = await requestShizukuPermission();
+      await refreshStatus();
+      if (!granted) {
+        Alert.alert("Подтвердите Shizuku", "В приложении Shizuku должна быть запущена служба. Затем подтвердите доступ для «Циклического времени».");
+      }
     } catch (error) {
-      Alert.alert("Недоступно", error instanceof Error ? error.message : "Не удалось открыть настройки синхронизации времени.");
+      Alert.alert("Shizuku недоступен", error instanceof Error ? error.message : "Установите и запустите Shizuku через беспроводную отладку.");
     }
   };
 
   const handleStart = async () => {
     if (!parsed.config) {
       Alert.alert("Проверьте параметры", parsed.error ?? "Заполните поля.");
+      return;
+    }
+    if (!shizukuReady) {
+      Alert.alert("Нужен Shizuku", "Запустите Shizuku и нажмите строку «Shizuku» в приложении, чтобы выдать доступ.");
       return;
     }
     if (!enabled) {
@@ -207,8 +218,10 @@ export default function HomeScreen() {
               <Text style={[styles.statusTitle, { color: colors.text }]}>{enabled ? "Включена" : "Не включена"}</Text>
               {running && <Text style={[styles.runningBadge, { color: colors.success }]}>{status.completedCycles}/{status.totalCycles}</Text>}
             </View>
-            <Pressable onPress={handleOpenTimeSyncSettings} style={({ pressed }) => [styles.syncButton, { borderColor: colors.border }, pressed && styles.pressed]}>
-              <Text style={[styles.syncButtonText, { color: colors.muted }]}>Синхронизация времени</Text>
+            <Pressable onPress={handleRequestShizuku} style={({ pressed }) => [styles.syncButton, { borderColor: shizukuReady ? colors.success : colors.border }, pressed && styles.pressed]}>
+              <Text style={[styles.syncButtonText, { color: shizukuReady ? colors.success : colors.muted }]}>
+                {shizukuReady ? "Shizuku: доступ выдан" : status.isShizukuRunning ? "Shizuku: разрешить доступ" : "Shizuku: запустите службу"}
+              </Text>
               <Text style={[styles.syncChevron, { color: colors.primary }]}>›</Text>
             </Pressable>
           </View>

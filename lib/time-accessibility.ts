@@ -9,6 +9,8 @@ export type CycleEvent = {
 
 export type AccessibilityStatus = {
   isAccessibilityEnabled: boolean;
+  isShizukuRunning: boolean;
+  isShizukuPermissionGranted: boolean;
   isRunning: boolean;
   completedCycles: number;
   totalCycles: number;
@@ -18,6 +20,7 @@ export type AccessibilityStatus = {
 
 type NativeTimeAccessibility = {
   getStatus: () => Promise<AccessibilityStatus>;
+  requestShizukuPermission: () => Promise<boolean>;
   openAccessibilitySettings: () => Promise<boolean>;
   openTimeSynchronizationSettings: () => Promise<boolean>;
   startCycle: (config: CycleConfig) => Promise<AccessibilityStatus>;
@@ -31,6 +34,8 @@ export const isNativeAccessibilityAvailable = Platform.OS === "android" && Boole
 
 const webStatus: AccessibilityStatus = {
   isAccessibilityEnabled: false,
+  isShizukuRunning: false,
+  isShizukuPermissionGranted: false,
   isRunning: false,
   completedCycles: 0,
   totalCycles: 0,
@@ -40,6 +45,11 @@ const webStatus: AccessibilityStatus = {
 
 export async function getAccessibilityStatus(): Promise<AccessibilityStatus> {
   return nativeModule ? nativeModule.getStatus() : webStatus;
+}
+
+export async function requestShizukuPermission(): Promise<boolean> {
+  if (!nativeModule) throw new Error("Shizuku доступен только в собранном Android APK.");
+  return nativeModule.requestShizukuPermission();
 }
 
 export async function openAccessibilitySettings(): Promise<boolean> {

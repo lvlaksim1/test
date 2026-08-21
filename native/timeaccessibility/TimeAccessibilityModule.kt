@@ -21,7 +21,24 @@ class TimeAccessibilityModule(private val context: ReactApplicationContext) : Re
     fun getStatus(promise: Promise) {
         val status = jsonToWritableMap(TimeCycleStore.status(context))
         status.putBoolean("isAccessibilityEnabled", TimeAccessibilityService.isServiceActive())
+        val shizuku = TimeShizukuController.state()
+        status.putBoolean("isShizukuRunning", shizuku.isRunning)
+        status.putBoolean("isShizukuPermissionGranted", shizuku.isPermissionGranted)
         promise.resolve(status)
+    }
+
+    @ReactMethod
+    fun requestShizukuPermission(promise: Promise) {
+        val current = TimeShizukuController.state()
+        if (!current.isRunning) {
+            promise.reject("SHIZUKU_NOT_RUNNING", "Сначала установите и запустите Shizuku через беспроводную отладку.")
+            return
+        }
+        if (current.isPermissionGranted || TimeShizukuController.requestPermission()) {
+            promise.resolve(true)
+        } else {
+            promise.resolve(false)
+        }
     }
 
     @ReactMethod
@@ -55,6 +72,11 @@ class TimeAccessibilityModule(private val context: ReactApplicationContext) : Re
 
     @ReactMethod
     fun startCycle(settings: ReadableMap, promise: Promise) {
+        val shizuku = TimeShizukuController.state()
+        if (!shizuku.isPermissionGranted) {
+            promise.reject("SHIZUKU_PERMISSION_REQUIRED", "Сначала запустите Shizuku и нажмите «Разрешить Shizuku» в приложении.")
+            return
+        }
         if (!TimeAccessibilityService.isServiceActive()) {
             promise.reject("ACCESSIBILITY_DISABLED", "Сначала вручную включите службу в специальных возможностях Android.")
             return
