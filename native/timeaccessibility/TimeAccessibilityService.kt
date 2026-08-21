@@ -29,6 +29,7 @@ class TimeAccessibilityService : AccessibilityService() {
     private var stageRetries = 0
     private var settingsLaunchRequested = false
     private var textModeRequested = false
+    private var automaticToggleGestureAttempted = false
     private val diagnosticKeys = mutableSetOf<String>()
     private val traceKeys = mutableSetOf<String>()
     private var calendarDateMode = CalendarDateMode.NONE
@@ -83,6 +84,7 @@ class TimeAccessibilityService : AccessibilityService() {
         stageRetries = 0
         settingsLaunchRequested = false
         textModeRequested = false
+        automaticToggleGestureAttempted = false
         diagnosticKeys.clear()
         traceKeys.clear()
         calendarDateMode = CalendarDateMode.NONE
@@ -369,9 +371,20 @@ class TimeAccessibilityService : AccessibilityService() {
     private fun turnOffAutomaticTimeIfNeeded(root: AccessibilityNodeInfo): Boolean {
         val automaticNode = findControl(root, AUTOMATIC_TIME_LABELS)
         if (automaticNode == null) {
-            trace("sync.row.missing", "Шаг 3/6: строка автоматической синхронизации не найдена; продолжаю к ручной дате.")
             logDialogDiagnostics(root, "Диагностика автоматической синхронизации")
-            return false
+            val dateNode = findExactControl(root, DATE_LABELS)
+            if (dateNode != null && isNodeEnabled(dateNode)) {
+                trace("sync.implied.off", "Шаг 3/6: переключатель не доступен службе, но пункт «Дата» уже активен; автоматическое время выключено.")
+                return false
+            }
+            if (!automaticToggleGestureAttempted) {
+                automaticToggleGestureAttempted = true
+                val tapped = tapRelativeToRoot(root, XIAOMI_AUTO_TIME_SWITCH_X, XIAOMI_AUTO_TIME_SWITCH_Y)
+                trace("sync.gesture.$tapped", "Шаг 3/6: Xiaomi не передал переключатель в дерево; нажатие по позиции переключателя выполнено: $tapped.")
+                return tapped
+            }
+            trace("sync.gesture.wait", "Шаг 3/6: ожидаю разблокировки пунктов «Дата» и «Время» после нажатия переключателя Xiaomi.")
+            return true
         }
         var container: AccessibilityNodeInfo? = automaticNode
         repeat(4) {
@@ -389,6 +402,27 @@ class TimeAccessibilityService : AccessibilityService() {
         }
         trace("sync.switch.missing", "Шаг 3/6: строка синхронизации найдена, но её переключатель не обнаружен.")
         return false
+    }
+
+    private fun isNodeEnabled(node: AccessibilityNodeInfo): Boolean {
+        var current: AccessibilityNodeInfo? = node
+        repeat(5) {
+            if (current?.isEnabled == false) return false
+            current = current?.parent
+        }
+        return true
+    }
+
+    private fun tapRelativeToRoot(root: AccessibilityNodeInfo, xFraction: Float, yFraction: Float): Boolean {
+        val bounds = Rect().also(root::getBoundsInScreen)
+        if (bounds.width() < 80 || bounds.height() < 80) return false
+        val x = bounds.left + bounds.width() * xFraction
+        val y = bounds.top + bounds.height() * yFraction
+        val path = Path().apply { moveTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 80))
+            .build()
+        return dispatchGesture(gesture, null, null)
     }
 
     private fun clickManualSetting(root: AccessibilityNodeInfo, labels: List<String>): Boolean {
@@ -943,6 +977,8 @@ class TimeAccessibilityService : AccessibilityService() {
         private const val SETTINGS_WAIT_RETRIES = 5
         private const val MAX_CALENDAR_MONTH_OFFSET = 60
         private const val MAX_WHEEL_VALUE_DISTANCE = 150
+        private const val XIAOMI_AUTO_TIME_SWITCH_X = 0.86f
+        private const val XIAOMI_AUTO_TIME_SWITCH_Y = 0.29f
 
         private var activeService: TimeAccessibilityService? = null
 
