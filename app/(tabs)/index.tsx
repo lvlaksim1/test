@@ -3,6 +3,7 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AppState,
   Alert,
   FlatList,
   Platform,
@@ -20,7 +21,6 @@ import {
   formatDateTime,
   getDefaultForm,
   parseCycleForm,
-  targetAt,
 } from "@/lib/cycle-utils";
 import {
   clearAccessibilityEvents,
@@ -96,8 +96,14 @@ export default function HomeScreen() {
     return () => clearInterval(interval);
   }, [refreshStatus, status.isRunning]);
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") void refreshStatus();
+    });
+    return () => subscription.remove();
+  }, [refreshStatus]);
+
   const parsed = useMemo(() => parseCycleForm(form), [form]);
-  const preview = parsed.config ? targetAt(parsed.config, Math.max(status.completedCycles, 0)) : null;
 
   const updateField = (field: keyof CycleForm) => (value: string) => {
     setForm((previous) => {
@@ -227,19 +233,11 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>3–4. Повторение</Text>
+          <Text style={styles.cardTitle}>Повторение</Text>
           <View style={styles.row}>
-            <View style={styles.rowPrimary}><Field label="Пауза, секунд" value={form.pauseSeconds} onChangeText={updateField("pauseSeconds")} placeholder="10" keyboardType="number-pad" /></View>
-            <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalCycles} onChangeText={updateField("totalCycles")} placeholder="1" keyboardType="number-pad" /></View>
+            <View style={styles.rowPrimary}><Field label="Пауза, секунд" value={form.pauseSeconds} onChangeText={updateField("pauseSeconds")} placeholder="2" keyboardType="number-pad" /></View>
+            <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalCycles} onChangeText={updateField("totalCycles")} placeholder="2" keyboardType="number-pad" /></View>
           </View>
-        </View>
-
-        <View style={styles.previewCard}>
-          <Text style={styles.previewLabel}>{running ? "Следующее целевое значение" : "Первое целевое значение"}</Text>
-          <Text style={styles.previewValue}>{formatDateTime(status.nextTargetMillis ?? preview?.getTime())}</Text>
-          <Text style={styles.previewSubtext}>
-            {running ? `Выполнено ${status.completedCycles} из ${status.totalCycles}` : "Первый цикл установит стартовую дату и время."}
-          </Text>
         </View>
 
         <Pressable
@@ -313,10 +311,6 @@ const styles = StyleSheet.create({
   fieldWrap: { flex: 1 },
   fieldLabel: { color: "#657187", fontSize: 12, fontWeight: "600", marginBottom: 6 },
   input: { backgroundColor: "#F6F8FC", borderWidth: 1, borderColor: "#D8E0EC", borderRadius: 11, paddingHorizontal: 11, height: 44, color: "#152033", fontSize: 15, fontWeight: "600" },
-  previewCard: { backgroundColor: "#EAF0FF", borderRadius: 18, padding: 17, borderWidth: 1, borderColor: "#C9D7FF" },
-  previewLabel: { color: "#4860A8", fontSize: 13, fontWeight: "700" },
-  previewValue: { color: "#193DAB", fontSize: 21, lineHeight: 27, fontWeight: "800", marginTop: 4 },
-  previewSubtext: { color: "#526580", fontSize: 13, lineHeight: 18, marginTop: 4 },
   primaryButton: { backgroundColor: "#3157C9", borderRadius: 15, height: 54, alignItems: "center", justifyContent: "center", shadowColor: "#3157C9", shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 3 },
   stopButton: { backgroundColor: "#C23B3B" },
   primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" },

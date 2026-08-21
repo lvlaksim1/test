@@ -28,10 +28,10 @@ export function getDefaultForm(now = new Date()): CycleForm {
     date,
     time,
     stepDays: "0",
-    stepHours: "0",
-    stepMinutes: "1",
-    pauseSeconds: "10",
-    totalCycles: "1",
+    stepHours: "2",
+    stepMinutes: "0",
+    pauseSeconds: "2",
+    totalCycles: "2",
   };
 }
 

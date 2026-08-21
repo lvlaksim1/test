@@ -27,6 +27,7 @@ class TimeAccessibilityModule(private val context: ReactApplicationContext) : Re
     @ReactMethod
     fun openAccessibilitySettings(promise: Promise) {
         runCatching {
+            TimeCycleStore.requestReturnToAppAfterEnable(context)
             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }

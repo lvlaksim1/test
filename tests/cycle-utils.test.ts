@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCycleForm, targetAt } from "../lib/cycle-utils";
+import { getDefaultForm, parseCycleForm, targetAt } from "../lib/cycle-utils";
 
 describe("parseCycleForm", () => {
+  it("задает согласованные значения по умолчанию", () => {
+    const form = getDefaultForm(new Date(2026, 7, 21, 12, 0));
+    expect(form).toMatchObject({
+      stepDays: "0",
+      stepHours: "2",
+      stepMinutes: "0",
+      pauseSeconds: "2",
+      totalCycles: "2",
+    });
+  });
+
   it("создает корректную конфигурацию из валидной формы", () => {
     const result = parseCycleForm({
       date: "21.08.2026",

@@ -20,6 +20,7 @@ object TimeCycleStore {
     private const val KEY_COMPLETED = "completed_cycles"
     private const val KEY_RUNNING = "is_running"
     private const val KEY_EVENTS = "events"
+    private const val KEY_RETURN_TO_APP = "return_to_app_after_enable"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -57,7 +58,18 @@ object TimeCycleStore {
 
     fun totalCycles(context: Context): Int = prefs(context).getInt(KEY_TOTAL, 0)
 
-    fun pauseMillis(context: Context): Long = prefs(context).getInt(KEY_PAUSE, 10).coerceAtLeast(1) * 1000L
+    fun pauseMillis(context: Context): Long = prefs(context).getInt(KEY_PAUSE, 2).coerceAtLeast(1) * 1000L
+
+    fun requestReturnToAppAfterEnable(context: Context) {
+        prefs(context).edit().putBoolean(KEY_RETURN_TO_APP, true).apply()
+    }
+
+    fun consumeReturnToAppAfterEnable(context: Context): Boolean {
+        val storage = prefs(context)
+        val requested = storage.getBoolean(KEY_RETURN_TO_APP, false)
+        if (requested) storage.edit().putBoolean(KEY_RETURN_TO_APP, false).apply()
+        return requested
+    }
 
     fun targetForCurrentCycle(context: Context): Long {
         val storage = prefs(context)

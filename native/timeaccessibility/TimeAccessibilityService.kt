@@ -43,6 +43,9 @@ class TimeAccessibilityService : AccessibilityService() {
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
         TimeCycleStore.addEvent(this, "Служба специальных возможностей подключена. ${installedBuildMarker()}")
+        if (TimeCycleStore.consumeReturnToAppAfterEnable(this)) {
+            handler.postDelayed({ returnToAppAfterEnable() }, 450L)
+        }
         if (TimeCycleStore.isRunning(this)) beginFromStorage(1_200L)
     }
 
@@ -95,7 +98,17 @@ class TimeAccessibilityService : AccessibilityService() {
         } else {
             @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
         }
-        return "Сборка ${packageInfo.versionName} ($code), AOSP-VP-20260821-4."
+        return "Сборка ${packageInfo.versionName} ($code), AOSP-VP-20260821-5."
+    }
+
+    private fun returnToAppAfterEnable() {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        if (launchIntent != null) {
+            startActivity(launchIntent)
+            TimeCycleStore.addEvent(this, "После включения службы выполнен возврат в приложение.")
+        }
     }
 
     private fun driveAutomation() {
@@ -339,7 +352,8 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private fun clickConfirmation(root: AccessibilityNodeInfo): Boolean =
-        findControl(root, CONFIRM_LABELS)?.let(::clickNode) ?: false
+        (findControlByResourceSuffix(root, CONFIRM_BUTTON_IDS) ?: findControl(root, CONFIRM_LABELS))
+            ?.let(::clickNode) ?: false
 
     private fun applyWheelPickers(root: AccessibilityNodeInfo, mode: WheelPickerMode): Boolean {
         val wheels = findWheelPickers(root)
@@ -769,7 +783,8 @@ class TimeAccessibilityService : AccessibilityService() {
         private val AUTOMATIC_MARKERS = listOf("automatic", "network", "автомат", "сети")
         private val DATE_LABELS = listOf("set date", "change date", "установить дату", "изменить дату", "дата")
         private val TIME_LABELS = listOf("set time", "change time", "установить время", "изменить время", "время")
-        private val CONFIRM_LABELS = listOf("ok", "готово", "подтвердить", "done", "сохранить")
+        private val CONFIRM_LABELS = listOf("ok", "ок", "готово", "подтвердить", "done", "сохранить")
+        private val CONFIRM_BUTTON_IDS = listOf("button1", "positive_button", "confirm_button", "ok_button")
         private val DATE_TEXT_MODE_LABELS = listOf(
             "switch to text input mode", "input mode", "text input", "keyboard input",
             "переключиться в режим текстового ввода", "режим текстового ввода", "ввод с клавиатуры", "режим ввода", "ввод даты",
