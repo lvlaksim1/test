@@ -29,7 +29,7 @@ class TimeAccessibilityService : AccessibilityService() {
     private var stageRetries = 0
     private var settingsLaunchRequested = false
     private var textModeRequested = false
-    private val diagnosticStages = mutableSetOf<Stage>()
+    private val diagnosticKeys = mutableSetOf<String>()
     private val traceKeys = mutableSetOf<String>()
     private var calendarDateMode = CalendarDateMode.NONE
     private var wheelPickerMode = WheelPickerMode.NONE
@@ -83,7 +83,7 @@ class TimeAccessibilityService : AccessibilityService() {
         stageRetries = 0
         settingsLaunchRequested = false
         textModeRequested = false
-        diagnosticStages.clear()
+        diagnosticKeys.clear()
         traceKeys.clear()
         calendarDateMode = CalendarDateMode.NONE
         wheelPickerMode = WheelPickerMode.NONE
@@ -101,7 +101,7 @@ class TimeAccessibilityService : AccessibilityService() {
         } else {
             @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
         }
-        return "Сборка ${packageInfo.versionName} ($code), MIUI-WHEEL-20260821-2."
+        return "Сборка ${packageInfo.versionName} ($code), MIUI-CONFIRM-20260821-3."
     }
 
     private fun returnToApp(note: String) {
@@ -230,6 +230,7 @@ class TimeAccessibilityService : AccessibilityService() {
         } else {
             editable.take(3).mapIndexed { index, node -> setText(node, dateParts[index]) }.all { it }
         }
+        trace("date.entered.$entered", "Ввод даты в системные поля: $entered.")
         if (!entered) {
             retryOrStop("Android не принял значение даты в поле ввода.")
             return
@@ -240,6 +241,7 @@ class TimeAccessibilityService : AccessibilityService() {
             textModeRequested = false
             moveTo(Stage.OPEN_TIME, AFTER_DATE_CONFIRM_DELAY_MS)
         } else {
+            logDialogDiagnostics(currentRoot, "Диагностика подтверждения даты")
             retryOrStop("Не найдена кнопка подтверждения даты.")
         }
     }
@@ -301,6 +303,7 @@ class TimeAccessibilityService : AccessibilityService() {
             setText(editable[0], String.format(Locale.US, "%02d", calendar.get(Calendar.HOUR_OF_DAY))) &&
                 setText(editable[1], String.format(Locale.US, "%02d", calendar.get(Calendar.MINUTE)))
         }
+        trace("time.entered.$entered", "Ввод времени в системные поля: $entered.")
         if (!entered) {
             retryOrStop("Android не принял значение времени в поле ввода.")
             return
@@ -364,9 +367,10 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private fun turnOffAutomaticTimeIfNeeded(root: AccessibilityNodeInfo): Boolean {
-        val automaticNode = findExactControl(root, AUTOMATIC_TIME_LABELS)
+        val automaticNode = findControl(root, AUTOMATIC_TIME_LABELS)
         if (automaticNode == null) {
             trace("sync.row.missing", "Шаг 3/6: строка автоматической синхронизации не найдена; продолжаю к ручной дате.")
+            logDialogDiagnostics(root, "Диагностика автоматической синхронизации")
             return false
         }
         var container: AccessibilityNodeInfo? = automaticNode
@@ -424,9 +428,45 @@ class TimeAccessibilityService : AccessibilityService() {
             findWheelPickers(root).size >= 2 ||
             findEditableNodes(root).isNotEmpty()
 
-    private fun clickConfirmation(root: AccessibilityNodeInfo): Boolean =
-        (findControlByResourceSuffix(root, CONFIRM_BUTTON_IDS) ?: findControl(root, CONFIRM_LABELS))
-            ?.let(::clickNode) ?: false
+    private fun clickConfirmation(root: AccessibilityNodeInfo): Boolean {
+        val labelledControl = findControlByResourceSuffix(root, CONFIRM_BUTTON_IDS) ?: findControl(root, CONFIRM_LABELS)
+        if (labelledControl != null && clickNode(labelledControl)) return true
+
+        val fallbackControl = findBottomRightDialogAction(root)
+        if (fallbackControl != null && clickOrTapNode(fallbackControl)) {
+            trace("confirmation.position.fallback", "Кнопка подтверждения распознана по расположению в правой нижней части системного диалога.")
+            return true
+        }
+        return false
+    }
+
+    private fun findBottomRightDialogAction(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val rootBounds = Rect().also(root::getBoundsInScreen)
+        if (rootBounds.width() < 80 || rootBounds.height() < 80) return null
+        val candidates = mutableListOf<Pair<Rect, AccessibilityNodeInfo>>()
+        fun visit(node: AccessibilityNodeInfo) {
+            val bounds = Rect().also(node::getBoundsInScreen)
+            val resourceName = node.viewIdResourceName?.lowercase().orEmpty()
+            val label = nodeLabel(node)
+            val className = node.className?.toString()?.lowercase().orEmpty()
+            val looksLikeAction = resourceName.contains("button") || resourceName.contains("action") ||
+                resourceName.contains("positive") || resourceName.contains("confirm") || resourceName.contains("ok") ||
+                className.contains("button") ||
+                CONFIRM_LABELS.any { label.contains(it) }
+            val isBottomRight = node.isVisibleToUser && hasClickableAncestor(node) &&
+                looksLikeAction &&
+                bounds.centerX() > rootBounds.centerX() &&
+                bounds.centerY() > rootBounds.centerY() &&
+                bounds.bottom <= rootBounds.bottom + 2
+            if (isBottomRight) candidates.add(bounds to node)
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::visit)
+        }
+        visit(root)
+        return candidates
+            .sortedWith(compareByDescending<Pair<Rect, AccessibilityNodeInfo>> { it.first.centerY() }.thenByDescending { it.first.centerX() })
+            .firstOrNull()
+            ?.second
+    }
 
     private fun applyWheelPickers(root: AccessibilityNodeInfo, mode: WheelPickerMode): Boolean {
         val wheels = findWheelPickers(root)
@@ -797,7 +837,7 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private fun logDialogDiagnostics(root: AccessibilityNodeInfo, title: String) {
-        if (!diagnosticStages.add(stage)) return
+        if (!diagnosticKeys.add("${stage.name}:$title")) return
         val details = mutableListOf<String>()
         fun walk(node: AccessibilityNodeInfo, depth: Int) {
             if (depth > 5 || details.size >= 24) return
@@ -909,13 +949,17 @@ class TimeAccessibilityService : AccessibilityService() {
         private val AUTOMATIC_TIME_LABELS = listOf(
             "automatic date", "automatic time", "set time automatically", "use network-provided time",
             "автоматическая дата", "автоматическое время", "использовать время сети", "автоматически",
-            "настраивать время автоматически",
+            "настраивать время автоматически", "устанавливать время автоматически", "установить время автоматически",
+            "использовать сетевое время", "использовать время, предоставленное сетью", "время сети",
         )
         private val AUTOMATIC_MARKERS = listOf("automatic", "network", "автомат", "сети")
         private val DATE_LABELS = listOf("set date", "change date", "установить дату", "изменить дату", "дата")
         private val TIME_LABELS = listOf("set time", "change time", "установить время", "изменить время", "время")
-        private val CONFIRM_LABELS = listOf("ok", "ок", "готово", "подтвердить", "done", "сохранить")
-        private val CONFIRM_BUTTON_IDS = listOf("button1", "positive_button", "confirm_button", "ok_button")
+        private val CONFIRM_LABELS = listOf("ok", "ок", "готово", "подтвердить", "done", "сохранить", "установить", "применить")
+        private val CONFIRM_BUTTON_IDS = listOf(
+            "button1", "positive_button", "confirm_button", "ok_button", "button_ok", "btn_ok",
+            "button_positive", "dialog_button_positive", "miuix_appcompat_button",
+        )
         private val DATE_TEXT_MODE_LABELS = listOf(
             "switch to text input mode", "input mode", "text input", "keyboard input",
             "переключиться в режим текстового ввода", "режим текстового ввода", "ввод с клавиатуры", "режим ввода", "ввод даты",
