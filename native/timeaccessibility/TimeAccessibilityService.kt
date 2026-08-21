@@ -30,6 +30,7 @@ class TimeAccessibilityService : AccessibilityService() {
     private var settingsLaunchRequested = false
     private var textModeRequested = false
     private val diagnosticStages = mutableSetOf<Stage>()
+    private val traceKeys = mutableSetOf<String>()
     private var calendarDateMode = CalendarDateMode.NONE
     private var wheelPickerMode = WheelPickerMode.NONE
 
@@ -83,6 +84,7 @@ class TimeAccessibilityService : AccessibilityService() {
         settingsLaunchRequested = false
         textModeRequested = false
         diagnosticStages.clear()
+        traceKeys.clear()
         calendarDateMode = CalendarDateMode.NONE
         wheelPickerMode = WheelPickerMode.NONE
         TimeCycleStore.addEvent(
@@ -99,7 +101,7 @@ class TimeAccessibilityService : AccessibilityService() {
         } else {
             @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
         }
-        return "Сборка ${packageInfo.versionName} ($code), AOSP-VP-20260821-6."
+        return "Сборка ${packageInfo.versionName} ($code), TRACE-20260821-1."
     }
 
     private fun returnToApp(note: String) {
@@ -137,6 +139,7 @@ class TimeAccessibilityService : AccessibilityService() {
         if (root == null || !isSettingsWindow(root)) {
             if (!settingsLaunchRequested) {
                 settingsLaunchRequested = true
+                trace("settings.launch", "Шаг 1/6: открываю системный экран «Дата и время».")
                 startActivity(Intent(Settings.ACTION_DATE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 retryOrStop("Android не открыл экран даты и времени.", SETTINGS_WAIT_RETRIES, SETTINGS_OPEN_DELAY_MS)
             } else {
@@ -148,6 +151,8 @@ class TimeAccessibilityService : AccessibilityService() {
             }
             return
         }
+
+        trace("settings.ready", "Шаг 2/6: системный экран «Дата и время» найден.")
 
         if (turnOffAutomaticTimeIfNeeded(root)) {
             retryOrStop("Android применяет отключение автоматического времени.", DEFAULT_STAGE_RETRIES, AFTER_TOGGLE_DELAY_MS)
@@ -171,12 +176,14 @@ class TimeAccessibilityService : AccessibilityService() {
         }
 
         if (!looksLikeDateDialog(root)) {
+            trace("date.dialog.missing", "Шаг 4/6: после нажатия «Дата» системный диалог не обнаружен; возвращаюсь к точной строке даты.")
             stage = Stage.OPEN_SETTINGS
             retryOrStop("Пункт «Дата» не открыл диалог выбора. Повторная попытка выполняется через точную строку даты.")
             return
         }
 
         if (!textModeRequested) {
+            trace("date.dialog.ready", "Шаг 4/6: диалог выбора даты обнаружен.")
             val modeButton = findTextInputToggle(root, DATE_TEXT_MODE_LABELS, DATE_INPUT_TOGGLE_IDS)
             if (modeButton != null && clickNode(modeButton)) {
                 textModeRequested = true
@@ -259,12 +266,14 @@ class TimeAccessibilityService : AccessibilityService() {
         }
 
         if (!looksLikeTimeDialog(root)) {
+            trace("time.dialog.missing", "Шаг 6/6: после нажатия «Время» системный диалог не обнаружен; возвращаюсь к точной строке времени.")
             stage = Stage.OPEN_TIME
             retryOrStop("Пункт «Время» не открыл диалог выбора. Повторная попытка выполняется через точную строку времени.")
             return
         }
 
         if (!textModeRequested) {
+            trace("time.dialog.ready", "Шаг 6/6: диалог выбора времени обнаружен.")
             val modeButton = findTextInputToggle(root, TIME_TEXT_MODE_LABELS, TIME_INPUT_TOGGLE_IDS)
             if (modeButton != null && clickNode(modeButton)) {
                 textModeRequested = true
@@ -314,6 +323,7 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private fun moveTo(nextStage: Stage, delayMillis: Long) {
+        trace("transition.${stage.name}.${nextStage.name}", "Переход: ${stage.label()} → ${nextStage.label()}.")
         stage = nextStage
         stageRetries = 0
         handler.postDelayed(driver, delayMillis)
@@ -325,6 +335,7 @@ class TimeAccessibilityService : AccessibilityService() {
         delayMillis: Long = RETRY_DELAY_MS,
     ) {
         stageRetries += 1
+        trace("retry.${stage.name}.$stageRetries", "Повтор ${stageRetries}/${retryLimit}: $failureReason")
         if (stageRetries >= retryLimit) {
             stopWithFailure(failureReason)
         } else {
@@ -352,19 +363,53 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private fun turnOffAutomaticTimeIfNeeded(root: AccessibilityNodeInfo): Boolean {
-        val automaticNode = findExactControl(root, AUTOMATIC_TIME_LABELS) ?: return false
+        val automaticNode = findExactControl(root, AUTOMATIC_TIME_LABELS)
+        if (automaticNode == null) {
+            trace("sync.row.missing", "Шаг 3/6: строка автоматической синхронизации не найдена; продолжаю к ручной дате.")
+            return false
+        }
         var container: AccessibilityNodeInfo? = automaticNode
         repeat(4) {
             val switch = container?.let(::findCheckableDescendant)
-            if (switch != null) return switch.isChecked && clickNode(switch)
+            if (switch != null) {
+                if (!switch.isChecked) {
+                    trace("sync.already.off", "Шаг 3/6: автоматическая синхронизация уже выключена.")
+                    return false
+                }
+                val clicked = clickNode(switch)
+                trace("sync.toggle.$clicked", "Шаг 3/6: переключатель автоматической синхронизации найден, результат нажатия: $clicked.")
+                return clicked
+            }
             container = container?.parent
         }
+        trace("sync.switch.missing", "Шаг 3/6: строка синхронизации найдена, но её переключатель не обнаружен.")
         return false
     }
 
     private fun clickManualSetting(root: AccessibilityNodeInfo, labels: List<String>): Boolean {
-        val manualNode = findExactControl(root, labels) ?: return false
-        return clickNode(manualNode)
+        val targetName = if (labels == DATE_LABELS) "Дата" else "Время"
+        val manualNode = findExactControl(root, labels)
+        if (manualNode == null) {
+            trace("row.${targetName}.missing", "Точная строка «$targetName» не найдена на текущем экране.")
+            return false
+        }
+        val clicked = clickNode(manualNode)
+        val step = if (targetName == "Дата") "4/6" else "6/6"
+        trace("row.${targetName}.click.$clicked", "Шаг $step: строка «$targetName» найдена, результат нажатия: $clicked.")
+        return clicked
+    }
+
+    private fun trace(key: String, message: String) {
+        if (traceKeys.add(key)) TimeCycleStore.addEvent(this, message)
+    }
+
+    private fun Stage.label(): String = when (this) {
+        Stage.OPEN_SETTINGS -> "экран настроек"
+        Stage.OPEN_DATE_DIALOG -> "выбор даты"
+        Stage.OPEN_TIME -> "экран времени"
+        Stage.OPEN_TIME_DIALOG -> "выбор времени"
+        Stage.VERIFY -> "проверка результата"
+        Stage.IDLE -> "ожидание"
     }
 
     private fun looksLikeDateDialog(root: AccessibilityNodeInfo): Boolean =
