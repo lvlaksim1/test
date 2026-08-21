@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 
 const PLUGIN_NAME = "with-time-accessibility";
-const PLUGIN_VERSION = "1.1.0";
+const PLUGIN_VERSION = "1.2.0";
 
 function withTimeAccessibility(config) {
   config = withAndroidManifest(config, (mod) => {
@@ -53,6 +53,12 @@ function withTimeAccessibility(config) {
       mod.modResults.contents = mod.modResults.contents.replace(
         /dependencies\s*\{/, 
         'dependencies {\n    implementation "dev.rikka.shizuku:api:13.1.5"\n    implementation "dev.rikka.shizuku:provider:13.1.5"',
+      );
+    }
+    if (!mod.modResults.contents.includes("aidl true")) {
+      mod.modResults.contents = mod.modResults.contents.replace(
+        /android\s*\{/, 
+        "android {\n    buildFeatures {\n        aidl true\n    }",
       );
     }
     return mod;
