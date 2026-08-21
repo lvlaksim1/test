@@ -44,7 +44,7 @@ class TimeAccessibilityService : AccessibilityService() {
         }
         TimeCycleStore.addEvent(this, "Служба специальных возможностей подключена. ${installedBuildMarker()}")
         if (TimeCycleStore.consumeReturnToAppAfterEnable(this)) {
-            handler.postDelayed({ returnToAppAfterEnable() }, 450L)
+            handler.postDelayed({ returnToApp("После включения службы выполнен возврат в приложение.") }, 450L)
         }
         if (TimeCycleStore.isRunning(this)) beginFromStorage(1_200L)
     }
@@ -72,6 +72,7 @@ class TimeAccessibilityService : AccessibilityService() {
         if (!TimeCycleStore.isRunning(this)) return
         if (TimeCycleStore.completedCycles(this) >= TimeCycleStore.totalCycles(this)) {
             TimeCycleStore.stop(this, "Все запланированные циклы уже завершены.")
+            returnToApp("Все циклы уже завершены. Выполнен возврат в приложение.")
             return
         }
 
@@ -98,16 +99,16 @@ class TimeAccessibilityService : AccessibilityService() {
         } else {
             @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
         }
-        return "Сборка ${packageInfo.versionName} ($code), AOSP-VP-20260821-5."
+        return "Сборка ${packageInfo.versionName} ($code), AOSP-VP-20260821-6."
     }
 
-    private fun returnToAppAfterEnable() {
+    private fun returnToApp(note: String) {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         if (launchIntent != null) {
             startActivity(launchIntent)
-            TimeCycleStore.addEvent(this, "После включения службы выполнен возврат в приложение.")
+            TimeCycleStore.addEvent(this, note)
         }
     }
 
@@ -325,6 +326,8 @@ class TimeAccessibilityService : AccessibilityService() {
         stage = Stage.IDLE
         if (success && TimeCycleStore.isRunning(this)) {
             beginFromStorage(TimeCycleStore.pauseMillis(this))
+        } else if (success) {
+            returnToApp("Все циклы завершены. Выполнен возврат в приложение.")
         }
     }
 
@@ -333,6 +336,7 @@ class TimeAccessibilityService : AccessibilityService() {
         TimeCycleStore.markAttemptFinished(this, targetMillis, false, detail)
         TimeCycleStore.stop(this, "Автоматизация остановлена: требуется проверка экрана даты и времени на этом телефоне.")
         stage = Stage.IDLE
+        returnToApp("Автоматизация остановлена. Выполнен возврат в приложение.")
     }
 
     private fun turnOffAutomaticTimeIfNeeded(root: AccessibilityNodeInfo): Boolean {
@@ -831,6 +835,7 @@ class TimeAccessibilityService : AccessibilityService() {
         fun requestStop() {
             activeService?.handler?.removeCallbacksAndMessages(null)
             activeService?.stage = Stage.IDLE
+            activeService?.returnToApp("Экстренная остановка выполнена. Выполнен возврат в приложение.")
         }
     }
 }
