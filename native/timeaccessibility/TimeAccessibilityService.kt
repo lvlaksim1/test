@@ -2,8 +2,10 @@ package __PACKAGE__.timeaccessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.content.Intent
+import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
@@ -436,6 +438,11 @@ class TimeAccessibilityService : AccessibilityService() {
         when (calendarDateMode) {
             CalendarDateMode.NONE -> {
                 if (headerYear == null) return false
+                if (matchesSelectedDateHeader(root, targetDay, targetMonth, targetYear)) {
+                    calendarDateMode = CalendarDateMode.CONFIRM
+                    handler.postDelayed(driver, CALENDAR_STEP_DELAY_MS)
+                    return true
+                }
                 if (headerYear != targetYear) {
                     val yearHeader = findControlByResourceSuffix(root, DATE_YEAR_HEADER_IDS) ?: return false
                     if (!clickNode(yearHeader)) return false
@@ -457,7 +464,7 @@ class TimeAccessibilityService : AccessibilityService() {
             }
 
             CalendarDateMode.MONTH -> {
-                val displayed = findDisplayedMonth(root) ?: return false
+                val displayed = findVisibleCalendarMonth(root) ?: return false
                 val monthOffset = (targetYear - displayed.second) * 12 + (targetMonth - displayed.first)
                 if (monthOffset == 0) {
                     calendarDateMode = CalendarDateMode.DAY
@@ -468,18 +475,23 @@ class TimeAccessibilityService : AccessibilityService() {
                     stopWithFailure("Целевая дата слишком далеко от отображаемого месяца календаря. Цикл остановлен.")
                     return true
                 }
-                val directionIds = if (monthOffset > 0) NEXT_MONTH_IDS else PREVIOUS_MONTH_IDS
-                val directionLabels = if (monthOffset > 0) NEXT_MONTH_LABELS else PREVIOUS_MONTH_LABELS
-                val monthButton = findControlByResourceSuffix(root, directionIds) ?: findControl(root, directionLabels)
-                    ?: return false
-                if (!clickNode(monthButton)) return false
+                val scrollAction = if (monthOffset > 0) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                val pager = findNodeByResourceSuffix(root, DAY_PAGER_IDS)
+                val scrolled = pager?.performAction(scrollAction) == true
+                if (!scrolled) {
+                    val directionIds = if (monthOffset > 0) NEXT_MONTH_IDS else PREVIOUS_MONTH_IDS
+                    val directionLabels = if (monthOffset > 0) NEXT_MONTH_LABELS else PREVIOUS_MONTH_LABELS
+                    val monthButton = findControlByResourceSuffix(root, directionIds) ?: findControl(root, directionLabels)
+                        ?: return false
+                    if (!clickNode(monthButton)) return false
+                }
                 handler.postDelayed(driver, CALENDAR_STEP_DELAY_MS)
                 return true
             }
 
             CalendarDateMode.DAY -> {
-                val dayNode = findDayOption(root, targetDay, targetMonth, targetYear) ?: return false
-                if (!clickNode(dayNode)) return false
+                val dayNode = findVisibleDayOption(root, targetDay, targetMonth, targetYear) ?: return false
+                if (!clickOrTapNode(dayNode)) return false
                 calendarDateMode = CalendarDateMode.CONFIRM
                 handler.postDelayed(driver, CALENDAR_STEP_DELAY_MS)
                 return true
@@ -510,27 +522,43 @@ class TimeAccessibilityService : AccessibilityService() {
         return visit(root)
     }
 
-    private fun findDisplayedMonth(root: AccessibilityNodeInfo): Pair<Int, Int>? {
-        fun visit(node: AccessibilityNodeInfo): Pair<Int, Int>? {
+    private fun matchesSelectedDateHeader(
+        root: AccessibilityNodeInfo,
+        targetDay: Int,
+        targetMonth: Int,
+        targetYear: Int,
+    ): Boolean {
+        val header = findNodeByResourceSuffix(root, DATE_HEADER_IDS)?.let(::nodeLabel) ?: return false
+        val hasYear = header.contains(targetYear.toString()) ||
+            findControlByResourceSuffix(root, DATE_YEAR_HEADER_IDS)?.let(::nodeLabel) == targetYear.toString()
+        return hasYear && HEADER_MONTH_NAMES[targetMonth].any { month -> header.contains(month) } &&
+            Regex("(^|\\D)$targetDay(\\D|$)").containsMatchIn(header)
+    }
+
+    private fun findVisibleCalendarMonth(root: AccessibilityNodeInfo): Pair<Int, Int>? {
+        val pager = findNodeByResourceSuffix(root, DAY_PAGER_IDS) ?: return null
+        val counts = mutableMapOf<Pair<Int, Int>, Int>()
+        fun visit(node: AccessibilityNodeInfo) {
             val label = nodeLabel(node)
             val year = YEAR_REGEX.find(label)?.value?.toIntOrNull()
             val month = DISPLAY_MONTHS.indexOfFirst { name -> label.contains(name) }
-            if (year != null && month >= 0) return month to year
-            for (index in 0 until node.childCount) {
-                val result = node.getChild(index)?.let(::visit)
-                if (result != null) return result
+            if (year != null && month >= 0 && node.isVisibleToUser) {
+                val key = month to year
+                counts[key] = (counts[key] ?: 0) + 1
             }
-            return null
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::visit)
         }
-        return visit(root)
+        visit(pager)
+        return counts.maxByOrNull { it.value }?.key
     }
 
-    private fun findDayOption(
+    private fun findVisibleDayOption(
         root: AccessibilityNodeInfo,
         targetDay: Int,
         targetMonth: Int,
         targetYear: Int,
     ): AccessibilityNodeInfo? {
+        val pager = findNodeByResourceSuffix(root, DAY_PAGER_IDS) ?: return null
         val monthNames = DAY_MONTH_NAMES[targetMonth]
         val dayPattern = Regex("(^|\\D)$targetDay(\\D|$)")
         fun visit(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -538,7 +566,20 @@ class TimeAccessibilityService : AccessibilityService() {
             val matchesDate = label.contains(targetYear.toString()) &&
                 monthNames.any { monthName -> label.contains(monthName) } &&
                 dayPattern.containsMatchIn(label)
-            if (matchesDate && hasClickableAncestor(node)) return node
+            if (matchesDate && node.isVisibleToUser) return node
+            for (index in 0 until node.childCount) {
+                val result = node.getChild(index)?.let(::visit)
+                if (result != null) return result
+            }
+            return null
+        }
+        return visit(pager)
+    }
+
+    private fun findNodeByResourceSuffix(root: AccessibilityNodeInfo, resourceSuffixes: List<String>): AccessibilityNodeInfo? {
+        fun visit(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            val resourceName = node.viewIdResourceName?.lowercase().orEmpty()
+            if (resourceSuffixes.any { suffix -> resourceName.endsWith(suffix) || resourceName.contains(suffix) }) return node
             for (index in 0 until node.childCount) {
                 val result = node.getChild(index)?.let(::visit)
                 if (result != null) return result
@@ -656,6 +697,17 @@ class TimeAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private fun clickOrTapNode(node: AccessibilityNodeInfo): Boolean {
+        if (clickNode(node)) return true
+        val bounds = Rect().also(node::getBoundsInScreen)
+        if (bounds.isEmpty()) return false
+        val path = Path().apply { moveTo(bounds.centerX().toFloat(), bounds.centerY().toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 70))
+            .build()
+        return dispatchGesture(gesture, null, null)
+    }
+
     private fun findEditableNodes(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
         val result = mutableListOf<AccessibilityNodeInfo>()
         fun walk(node: AccessibilityNodeInfo) {
@@ -719,6 +771,8 @@ class TimeAccessibilityService : AccessibilityService() {
             "date_picker_header_toggle", "mtrl_picker_header_toggle", "date_picker_toggle", "toggle_mode",
         )
         private val DATE_YEAR_HEADER_IDS = listOf("date_picker_header_year", "mtrl_picker_header_selection_text")
+        private val DATE_HEADER_IDS = listOf("date_picker_header_date", "mtrl_picker_header_selection_text")
+        private val DAY_PAGER_IDS = listOf("day_picker_view_pager", "calendar_view_pager", "month_pager")
         private val TIME_INPUT_TOGGLE_IDS = listOf(
             "input_mode", "time_picker_mode", "time_picker_header_toggle", "toggle_mode",
         )
@@ -732,6 +786,10 @@ class TimeAccessibilityService : AccessibilityService() {
         private val DAY_MONTH_NAMES = listOf(
             listOf("января"), listOf("февраля"), listOf("марта"), listOf("апреля"), listOf("мая"), listOf("июня"),
             listOf("июля"), listOf("августа"), listOf("сентября"), listOf("октября"), listOf("ноября"), listOf("декабря"),
+        )
+        private val HEADER_MONTH_NAMES = listOf(
+            listOf("янв"), listOf("фев"), listOf("мар"), listOf("апр"), listOf("мая", "май"), listOf("июн"),
+            listOf("июл"), listOf("авг"), listOf("сен"), listOf("окт"), listOf("ноя"), listOf("дек"),
         )
         private val YEAR_REGEX = Regex("\\b\\d{4}\\b")
 
