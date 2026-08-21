@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
+import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -27,6 +28,7 @@ class TimeAccessibilityService : AccessibilityService() {
     private var textModeRequested = false
     private val diagnosticStages = mutableSetOf<Stage>()
     private var calendarDateMode = CalendarDateMode.NONE
+    private var wheelPickerMode = WheelPickerMode.NONE
 
     private val driver = Runnable { driveAutomation() }
 
@@ -75,6 +77,7 @@ class TimeAccessibilityService : AccessibilityService() {
         textModeRequested = false
         diagnosticStages.clear()
         calendarDateMode = CalendarDateMode.NONE
+        wheelPickerMode = WheelPickerMode.NONE
         TimeCycleStore.addEvent(
             this,
             "Начата попытка ${TimeCycleStore.completedCycles(this) + 1} из ${TimeCycleStore.totalCycles(this)}.",
@@ -150,8 +153,11 @@ class TimeAccessibilityService : AccessibilityService() {
             textModeRequested = true
         }
 
+        if (findWheelPickers(root).isNotEmpty() && applyWheelPickers(root, WheelPickerMode.DATE)) return
+
         val editable = findEditableNodes(root)
         if (editable.isEmpty()) {
+            if (applyWheelPickers(root, WheelPickerMode.DATE)) return
             logDialogDiagnostics(root, "Диагностика выбора даты")
             if (selectDateInCalendar(root)) return
             retryOrStop("В диалоге даты не найдены поля ввода. Возможно, оболочка телефона использует неподдерживаемый вид выбора даты.")
@@ -229,8 +235,11 @@ class TimeAccessibilityService : AccessibilityService() {
             textModeRequested = true
         }
 
+        if (findWheelPickers(root).isNotEmpty() && applyWheelPickers(root, WheelPickerMode.TIME)) return
+
         val editable = findEditableNodes(root)
         if (editable.isEmpty()) {
+            if (applyWheelPickers(root, WheelPickerMode.TIME)) return
             logDialogDiagnostics(root, "Диагностика выбора времени")
             retryOrStop("В диалоге времени не найдены поля ввода. Возможно, оболочка телефона использует неподдерживаемый вид выбора времени.")
             return
@@ -318,6 +327,104 @@ class TimeAccessibilityService : AccessibilityService() {
 
     private fun clickConfirmation(root: AccessibilityNodeInfo): Boolean =
         findControl(root, CONFIRM_LABELS)?.let(::clickNode) ?: false
+
+    private fun applyWheelPickers(root: AccessibilityNodeInfo, mode: WheelPickerMode): Boolean {
+        val wheels = findWheelPickers(root)
+        val expectedCount = if (mode == WheelPickerMode.DATE) 3 else 2
+        if (wheels.size < expectedCount) return false
+
+        wheelPickerMode = mode
+        val calendar = Calendar.getInstance().apply { timeInMillis = targetMillis }
+        val targets = if (mode == WheelPickerMode.DATE) {
+            listOf(
+                calendar.get(Calendar.DAY_OF_MONTH),
+                calendar.get(Calendar.MONTH) + 1,
+                calendar.get(Calendar.YEAR),
+            )
+        } else {
+            listOf(calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE))
+        }
+        val selectedWheels = wheels.take(expectedCount)
+        val results = selectedWheels.mapIndexed { index, wheel -> setWheelValue(wheel, targets[index]) }
+
+        if (results.any { it == WheelUpdate.FAILED }) {
+            retryOrStop("Не удалось прочитать или прокрутить одно из колес выбора ${if (mode == WheelPickerMode.DATE) "даты" else "времени"}.")
+            return true
+        }
+        if (results.any { it == WheelUpdate.ADJUSTING }) {
+            handler.postDelayed(driver, WHEEL_STEP_DELAY_MS)
+            return true
+        }
+
+        val currentRoot = rootInActiveWindow ?: root
+        if (!clickConfirmation(currentRoot)) {
+            retryOrStop("Не найдена кнопка подтверждения колесного выбора.")
+            return true
+        }
+
+        textModeRequested = false
+        wheelPickerMode = WheelPickerMode.NONE
+        if (mode == WheelPickerMode.DATE) {
+            moveTo(Stage.OPEN_TIME, AFTER_DATE_CONFIRM_DELAY_MS)
+        } else {
+            moveTo(Stage.VERIFY, VERIFY_DELAY_MS)
+        }
+        return true
+    }
+
+    private fun findWheelPickers(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val result = mutableListOf<AccessibilityNodeInfo>()
+        fun visit(node: AccessibilityNodeInfo) {
+            val className = node.className?.toString()?.lowercase().orEmpty()
+            val resourceName = node.viewIdResourceName?.lowercase().orEmpty()
+            val isNumberPicker = className.endsWith("numberpicker") || resourceName.contains("numberpicker")
+            val canScroll = node.actionList.any { action ->
+                action.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD || action.id == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            }
+            if (isNumberPicker && canScroll) {
+                result.add(node)
+                return
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::visit)
+        }
+        visit(root)
+        return result.sortedBy { node -> Rect().also(node::getBoundsInScreen).left }
+    }
+
+    private fun setWheelValue(wheel: AccessibilityNodeInfo, target: Int): WheelUpdate {
+        val current = readWheelValue(wheel) ?: return WheelUpdate.FAILED
+        if (current == target) return WheelUpdate.SETTLED
+        if (kotlin.math.abs(current - target) > MAX_WHEEL_VALUE_DISTANCE) return WheelUpdate.FAILED
+
+        val action = if (target > current) {
+            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        } else {
+            AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        }
+        return if (wheel.performAction(action)) WheelUpdate.ADJUSTING else WheelUpdate.FAILED
+    }
+
+    private fun readWheelValue(wheel: AccessibilityNodeInfo): Int? {
+        val editable = findEditableNodes(wheel).firstOrNull()
+        val fromInput = editable?.let(::nodeLabel)?.let(::parseWheelNumber)
+        if (fromInput != null) return fromInput
+
+        val candidates = mutableListOf<Pair<Int, String>>()
+        val wheelBounds = Rect().also(wheel::getBoundsInScreen)
+        fun visit(node: AccessibilityNodeInfo) {
+            val label = nodeLabel(node)
+            if (parseWheelNumber(label) != null) {
+                val bounds = Rect().also(node::getBoundsInScreen)
+                candidates.add(kotlin.math.abs(bounds.centerY() - wheelBounds.centerY()) to label)
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let(::visit)
+        }
+        visit(wheel)
+        return candidates.minByOrNull { it.first }?.second?.let(::parseWheelNumber)
+    }
+
+    private fun parseWheelNumber(value: String): Int? =
+        Regex("-?\\d{1,4}").find(value)?.value?.toIntOrNull()
 
     private fun selectDateInCalendar(root: AccessibilityNodeInfo): Boolean {
         val target = Calendar.getInstance().apply { timeInMillis = targetMillis }
@@ -568,9 +675,11 @@ class TimeAccessibilityService : AccessibilityService() {
 
     private enum class Stage { IDLE, OPEN_SETTINGS, OPEN_DATE_DIALOG, OPEN_TIME, OPEN_TIME_DIALOG, VERIFY }
     private enum class CalendarDateMode { NONE, YEAR_LIST, MONTH, DAY, CONFIRM }
+    private enum class WheelPickerMode { NONE, DATE, TIME }
+    private enum class WheelUpdate { SETTLED, ADJUSTING, FAILED }
 
     companion object {
-        private const val FLOW_TIMEOUT_MS = 30_000L
+        private const val FLOW_TIMEOUT_MS = 60_000L
         private const val INITIAL_DELAY_MS = 700L
         private const val EVENT_SETTLE_DELAY_MS = 350L
         private const val SETTINGS_OPEN_DELAY_MS = 1_200L
@@ -581,10 +690,12 @@ class TimeAccessibilityService : AccessibilityService() {
         private const val VERIFY_DELAY_MS = 1_300L
         private const val RETRY_DELAY_MS = 650L
         private const val CALENDAR_STEP_DELAY_MS = 500L
+        private const val WHEEL_STEP_DELAY_MS = 180L
         private const val VERIFY_TOLERANCE_MS = 120_000L
         private const val DEFAULT_STAGE_RETRIES = 7
         private const val SETTINGS_WAIT_RETRIES = 5
         private const val MAX_CALENDAR_MONTH_OFFSET = 60
+        private const val MAX_WHEEL_VALUE_DISTANCE = 150
 
         private var activeService: TimeAccessibilityService? = null
 
