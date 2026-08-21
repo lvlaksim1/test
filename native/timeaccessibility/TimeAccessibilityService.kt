@@ -384,7 +384,7 @@ class TimeAccessibilityService : AccessibilityService() {
             for (index in 0 until node.childCount) node.getChild(index)?.let { walk(it, depth + 1) }
         }
         walk(root, 0)
-        TimeCycleStore.addEvent(this, "$title: ${details.joinToString(" | ").take(1_400)}")
+        TimeCycleStore.addEvent(this, "$title: ${details.joinToString(" | ")}")
     }
 
     private fun hasClickableAncestor(node: AccessibilityNodeInfo): Boolean {

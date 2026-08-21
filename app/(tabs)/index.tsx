@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -30,6 +31,7 @@ import {
   stopAccessibilityCycle,
   type AccessibilityStatus,
 } from "@/lib/time-accessibility";
+import { formatJournalForCopy } from "@/lib/journal-export";
 
 const FORM_STORAGE_KEY = "time-cycler-form-v1";
 
@@ -158,6 +160,17 @@ export default function HomeScreen() {
     }
   };
 
+  const handleCopyLog = async () => {
+    if (!status.events.length) return;
+    try {
+      await Clipboard.setStringAsync(formatJournalForCopy(status.events));
+      if (Platform.OS !== "web") await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Журнал скопирован", "Все записи, включая диагностику системного диалога, помещены в буфер обмена.");
+    } catch (error) {
+      Alert.alert("Не удалось скопировать", error instanceof Error ? error.message : "Повторите попытку.");
+    }
+  };
+
   const enabled = status.isAccessibilityEnabled;
   const running = status.isRunning;
 
@@ -245,9 +258,14 @@ export default function HomeScreen() {
         <View style={styles.logHeading}>
           <Text style={styles.cardTitle}>Журнал действий</Text>
           {status.events.length > 0 && (
-            <Pressable onPress={handleClearLog} style={({ pressed }) => [styles.clearButton, pressed && styles.pressed]}>
-              <Text style={styles.clearButtonText}>Очистить</Text>
-            </Pressable>
+            <View style={styles.logActions}>
+              <Pressable onPress={handleCopyLog} style={({ pressed }) => [styles.copyButton, pressed && styles.pressed]}>
+                <Text style={styles.copyButtonText}>Копировать</Text>
+              </Pressable>
+              <Pressable onPress={handleClearLog} style={({ pressed }) => [styles.clearButton, pressed && styles.pressed]}>
+                <Text style={styles.clearButtonText}>Очистить</Text>
+              </Pressable>
+            </View>
           )}
         </View>
         <FlatList
@@ -308,6 +326,9 @@ const styles = StyleSheet.create({
   noticeTitle: { color: "#795414", fontWeight: "800", fontSize: 14, marginBottom: 4 },
   noticeText: { color: "#765F34", fontSize: 13, lineHeight: 19 },
   logHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", marginTop: 4 },
+  logActions: { flexDirection: "row", alignItems: "center", gap: 2 },
+  copyButton: { paddingVertical: 5, paddingHorizontal: 7 },
+  copyButtonText: { color: "#3157C9", fontSize: 13, fontWeight: "800" },
   clearButton: { paddingVertical: 5, paddingHorizontal: 7 },
   clearButtonText: { color: "#3157C9", fontSize: 13, fontWeight: "700" },
   emptyLog: { backgroundColor: "#FFFFFF", borderRadius: 15, borderWidth: 1, borderColor: "#E1E7F0", padding: 16 },
