@@ -56,6 +56,10 @@ const config: ExpoConfig = {
   plugins: [
     "expo-router",
     "./plugins/with-time-accessibility",
+    "expo-audio",
+    "expo-font",
+    "expo-video",
+    "expo-web-browser",
     [
       "expo-splash-screen",
       {

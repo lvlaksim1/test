@@ -91,7 +91,7 @@ class TimeAccessibilityModule(private val context: ReactApplicationContext) : Re
                 is Double -> result.putDouble(key, item)
                 is String -> result.putString(key, item)
                 is JSONObject -> result.putMap(key, jsonToWritableMap(item))
-                is JSONArray -> result.putArray(jsonToWritableArray(item))
+                is JSONArray -> result.putArray(key, jsonToWritableArray(item))
                 else -> result.putString(key, item.toString())
             }
         }
