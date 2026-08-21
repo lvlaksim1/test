@@ -8,6 +8,7 @@ import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -41,7 +42,7 @@ class TimeAccessibilityService : AccessibilityService() {
             flags = flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
-        TimeCycleStore.addEvent(this, "Служба специальных возможностей подключена.")
+        TimeCycleStore.addEvent(this, "Служба специальных возможностей подключена. ${installedBuildMarker()}")
         if (TimeCycleStore.isRunning(this)) beginFromStorage(1_200L)
     }
 
@@ -85,6 +86,16 @@ class TimeAccessibilityService : AccessibilityService() {
             "Начата попытка ${TimeCycleStore.completedCycles(this) + 1} из ${TimeCycleStore.totalCycles(this)}.",
         )
         handler.postDelayed(driver, delayMillis)
+    }
+
+    private fun installedBuildMarker(): String {
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
+        }
+        return "Сборка ${packageInfo.versionName} ($code), AOSP-VP-20260821-4."
     }
 
     private fun driveAutomation() {
