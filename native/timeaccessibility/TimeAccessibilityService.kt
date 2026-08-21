@@ -26,6 +26,7 @@ class TimeAccessibilityService : AccessibilityService() {
     private var settingsLaunchRequested = false
     private var textModeRequested = false
     private val diagnosticStages = mutableSetOf<Stage>()
+    private var calendarDateMode = CalendarDateMode.NONE
 
     private val driver = Runnable { driveAutomation() }
 
@@ -73,6 +74,7 @@ class TimeAccessibilityService : AccessibilityService() {
         settingsLaunchRequested = false
         textModeRequested = false
         diagnosticStages.clear()
+        calendarDateMode = CalendarDateMode.NONE
         TimeCycleStore.addEvent(
             this,
             "Начата попытка ${TimeCycleStore.completedCycles(this) + 1} из ${TimeCycleStore.totalCycles(this)}.",
@@ -151,6 +153,7 @@ class TimeAccessibilityService : AccessibilityService() {
         val editable = findEditableNodes(root)
         if (editable.isEmpty()) {
             logDialogDiagnostics(root, "Диагностика выбора даты")
+            if (selectDateInCalendar(root)) return
             retryOrStop("В диалоге даты не найдены поля ввода. Возможно, оболочка телефона использует неподдерживаемый вид выбора даты.")
             return
         }
@@ -316,6 +319,128 @@ class TimeAccessibilityService : AccessibilityService() {
     private fun clickConfirmation(root: AccessibilityNodeInfo): Boolean =
         findControl(root, CONFIRM_LABELS)?.let(::clickNode) ?: false
 
+    private fun selectDateInCalendar(root: AccessibilityNodeInfo): Boolean {
+        val target = Calendar.getInstance().apply { timeInMillis = targetMillis }
+        val targetYear = target.get(Calendar.YEAR)
+        val targetMonth = target.get(Calendar.MONTH)
+        val targetDay = target.get(Calendar.DAY_OF_MONTH)
+        val headerYear = findControlByResourceSuffix(root, DATE_YEAR_HEADER_IDS)?.let(::nodeLabel)?.toIntOrNull()
+
+        when (calendarDateMode) {
+            CalendarDateMode.NONE -> {
+                if (headerYear == null) return false
+                if (headerYear != targetYear) {
+                    val yearHeader = findControlByResourceSuffix(root, DATE_YEAR_HEADER_IDS) ?: return false
+                    if (!clickNode(yearHeader)) return false
+                    calendarDateMode = CalendarDateMode.YEAR_LIST
+                    handler.postDelayed(driver, CALENDAR_STEP_DELAY_MS)
+                } else {
+                    calendarDateMode = CalendarDateMode.MONTH
+                    handler.postDelayed(driver, CALENDAR_STEP_DELAY_MS)
+                }
+                return true
+            }
+
+            CalendarDateMode.YEAR_LIST -> {
+                val targetYearNode = findYearOption(root, targetYear) ?: return false
+                if (!clickNode(targetYearNode)) return false
+                calendarDateMode = CalendarDateMode.MONTH
+                handler.postDelayed(driver, CALENDAR_STEP_DELAY_MS)
+                return true
+            }
+
+            CalendarDateMode.MONTH -> {
+                val displayed = findDisplayedMonth(root) ?: return false
+                val monthOffset = (targetYear - displayed.second) * 12 + (targetMonth - displayed.first)
+                if (monthOffset == 0) {
+                    calendarDateMode = CalendarDateMode.DAY
+                    handler.postDelayed(driver, CALENDAR_STEP_DELAY_MS)
+                    return true
+                }
+                if (kotlin.math.abs(monthOffset) > MAX_CALENDAR_MONTH_OFFSET) {
+                    stopWithFailure("Целевая дата слишком далеко от отображаемого месяца календаря. Цикл остановлен.")
+                    return true
+                }
+                val directionIds = if (monthOffset > 0) NEXT_MONTH_IDS else PREVIOUS_MONTH_IDS
+                val directionLabels = if (monthOffset > 0) NEXT_MONTH_LABELS else PREVIOUS_MONTH_LABELS
+                val monthButton = findControlByResourceSuffix(root, directionIds) ?: findControl(root, directionLabels)
+                    ?: return false
+                if (!clickNode(monthButton)) return false
+                handler.postDelayed(driver, CALENDAR_STEP_DELAY_MS)
+                return true
+            }
+
+            CalendarDateMode.DAY -> {
+                val dayNode = findDayOption(root, targetDay, targetMonth, targetYear) ?: return false
+                if (!clickNode(dayNode)) return false
+                calendarDateMode = CalendarDateMode.CONFIRM
+                handler.postDelayed(driver, CALENDAR_STEP_DELAY_MS)
+                return true
+            }
+
+            CalendarDateMode.CONFIRM -> {
+                if (!clickConfirmation(root)) return false
+                textModeRequested = false
+                calendarDateMode = CalendarDateMode.NONE
+                moveTo(Stage.OPEN_TIME, AFTER_DATE_CONFIRM_DELAY_MS)
+                return true
+            }
+        }
+    }
+
+    private fun findYearOption(root: AccessibilityNodeInfo, targetYear: Int): AccessibilityNodeInfo? {
+        fun visit(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            val resource = node.viewIdResourceName?.lowercase().orEmpty()
+            if (nodeLabel(node) == targetYear.toString() && !resource.contains("header_year") && hasClickableAncestor(node)) {
+                return node
+            }
+            for (index in 0 until node.childCount) {
+                val result = node.getChild(index)?.let(::visit)
+                if (result != null) return result
+            }
+            return null
+        }
+        return visit(root)
+    }
+
+    private fun findDisplayedMonth(root: AccessibilityNodeInfo): Pair<Int, Int>? {
+        fun visit(node: AccessibilityNodeInfo): Pair<Int, Int>? {
+            val label = nodeLabel(node)
+            val year = YEAR_REGEX.find(label)?.value?.toIntOrNull()
+            val month = DISPLAY_MONTHS.indexOfFirst { name -> label.contains(name) }
+            if (year != null && month >= 0) return month to year
+            for (index in 0 until node.childCount) {
+                val result = node.getChild(index)?.let(::visit)
+                if (result != null) return result
+            }
+            return null
+        }
+        return visit(root)
+    }
+
+    private fun findDayOption(
+        root: AccessibilityNodeInfo,
+        targetDay: Int,
+        targetMonth: Int,
+        targetYear: Int,
+    ): AccessibilityNodeInfo? {
+        val monthNames = DAY_MONTH_NAMES[targetMonth]
+        val dayPattern = Regex("(^|\\D)$targetDay(\\D|$)")
+        fun visit(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            val label = nodeLabel(node)
+            val matchesDate = label.contains(targetYear.toString()) &&
+                monthNames.any { monthName -> label.contains(monthName) } &&
+                dayPattern.containsMatchIn(label)
+            if (matchesDate && hasClickableAncestor(node)) return node
+            for (index in 0 until node.childCount) {
+                val result = node.getChild(index)?.let(::visit)
+                if (result != null) return result
+            }
+            return null
+        }
+        return visit(root)
+    }
+
     private fun findTextInputToggle(
         root: AccessibilityNodeInfo,
         labels: List<String>,
@@ -442,6 +567,7 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private enum class Stage { IDLE, OPEN_SETTINGS, OPEN_DATE_DIALOG, OPEN_TIME, OPEN_TIME_DIALOG, VERIFY }
+    private enum class CalendarDateMode { NONE, YEAR_LIST, MONTH, DAY, CONFIRM }
 
     companion object {
         private const val FLOW_TIMEOUT_MS = 30_000L
@@ -454,9 +580,11 @@ class TimeAccessibilityService : AccessibilityService() {
         private const val AFTER_DATE_CONFIRM_DELAY_MS = 700L
         private const val VERIFY_DELAY_MS = 1_300L
         private const val RETRY_DELAY_MS = 650L
+        private const val CALENDAR_STEP_DELAY_MS = 500L
         private const val VERIFY_TOLERANCE_MS = 120_000L
         private const val DEFAULT_STAGE_RETRIES = 7
         private const val SETTINGS_WAIT_RETRIES = 5
+        private const val MAX_CALENDAR_MONTH_OFFSET = 60
 
         private var activeService: TimeAccessibilityService? = null
 
@@ -479,9 +607,22 @@ class TimeAccessibilityService : AccessibilityService() {
         private val DATE_INPUT_TOGGLE_IDS = listOf(
             "date_picker_header_toggle", "mtrl_picker_header_toggle", "date_picker_toggle", "toggle_mode",
         )
+        private val DATE_YEAR_HEADER_IDS = listOf("date_picker_header_year", "mtrl_picker_header_selection_text")
         private val TIME_INPUT_TOGGLE_IDS = listOf(
             "input_mode", "time_picker_mode", "time_picker_header_toggle", "toggle_mode",
         )
+        private val NEXT_MONTH_IDS = listOf("next", "next_month", "date_picker_next", "next_button")
+        private val PREVIOUS_MONTH_IDS = listOf("prev", "previous", "previous_month", "date_picker_prev", "prev_button")
+        private val NEXT_MONTH_LABELS = listOf("next month", "следующий месяц")
+        private val PREVIOUS_MONTH_LABELS = listOf("previous month", "предыдущий месяц")
+        private val DISPLAY_MONTHS = listOf(
+            "январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+        )
+        private val DAY_MONTH_NAMES = listOf(
+            listOf("января"), listOf("февраля"), listOf("марта"), listOf("апреля"), listOf("мая"), listOf("июня"),
+            listOf("июля"), listOf("августа"), listOf("сентября"), listOf("октября"), listOf("ноября"), listOf("декабря"),
+        )
+        private val YEAR_REGEX = Regex("\\b\\d{4}\\b")
 
         fun isServiceActive(): Boolean = activeService != null
 
