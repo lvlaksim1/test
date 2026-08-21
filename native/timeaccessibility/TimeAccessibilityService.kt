@@ -12,6 +12,7 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
@@ -20,7 +21,9 @@ class TimeAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var stage = Stage.IDLE
     private var targetMillis = 0L
-    private var stageStartedAt = 0L
+    private var attemptStartedAt = 0L
+    private var stageRetries = 0
+    private var settingsLaunchRequested = false
     private var textModeRequested = false
 
     private val driver = Runnable { driveAutomation() }
@@ -33,41 +36,45 @@ class TimeAccessibilityService : AccessibilityService() {
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
         TimeCycleStore.addEvent(this, "Служба специальных возможностей подключена.")
-        if (TimeCycleStore.isRunning(this)) {
-            beginFromStorage(1200L)
-        }
+        if (TimeCycleStore.isRunning(this)) beginFromStorage(1_200L)
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        if (activeService === this) {
-            activeService = null
-        }
+        if (activeService === this) activeService = null
         super.onDestroy()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!TimeCycleStore.isRunning(this) || stage == Stage.IDLE) return
         handler.removeCallbacks(driver)
-        handler.postDelayed(driver, 350L)
+        handler.postDelayed(driver, EVENT_SETTLE_DELAY_MS)
     }
 
     override fun onInterrupt() {
-        TimeCycleStore.addEvent(this, "Служба автоматизации была прервана Android.")
+        if (stage != Stage.IDLE) {
+            stopWithFailure("Android прервал службу до завершения изменения времени.")
+        }
     }
 
-    private fun beginFromStorage(delayMillis: Long = 700L) {
+    private fun beginFromStorage(delayMillis: Long = INITIAL_DELAY_MS) {
         handler.removeCallbacksAndMessages(null)
         if (!TimeCycleStore.isRunning(this)) return
         if (TimeCycleStore.completedCycles(this) >= TimeCycleStore.totalCycles(this)) {
             TimeCycleStore.stop(this, "Все запланированные циклы уже завершены.")
             return
         }
+
         targetMillis = TimeCycleStore.targetForCurrentCycle(this)
         stage = Stage.OPEN_SETTINGS
-        stageStartedAt = SystemClock.elapsedRealtime()
+        attemptStartedAt = SystemClock.elapsedRealtime()
+        stageRetries = 0
+        settingsLaunchRequested = false
         textModeRequested = false
-        TimeCycleStore.addEvent(this, "Начата попытка ${TimeCycleStore.completedCycles(this) + 1} из ${TimeCycleStore.totalCycles(this)}.")
+        TimeCycleStore.addEvent(
+            this,
+            "Начата попытка ${TimeCycleStore.completedCycles(this) + 1} из ${TimeCycleStore.totalCycles(this)}.",
+        )
         handler.postDelayed(driver, delayMillis)
     }
 
@@ -76,8 +83,8 @@ class TimeAccessibilityService : AccessibilityService() {
             stage = Stage.IDLE
             return
         }
-        if (SystemClock.elapsedRealtime() - stageStartedAt > FLOW_TIMEOUT_MS) {
-            finishAttempt(false, "Превышено время ожидания системного экрана. Проверьте язык и оболочку телефона.")
+        if (SystemClock.elapsedRealtime() - attemptStartedAt > FLOW_TIMEOUT_MS) {
+            stopWithFailure("Не удалось завершить ручной ввод за отведенное время. Цикл остановлен, чтобы не открывать настройки повторно.")
             return
         }
 
@@ -94,155 +101,259 @@ class TimeAccessibilityService : AccessibilityService() {
     private fun openSettingsAndPrepare() {
         val root = rootInActiveWindow
         if (root == null || !isSettingsWindow(root)) {
-            val intent = Intent(Settings.ACTION_DATE_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (!settingsLaunchRequested) {
+                settingsLaunchRequested = true
+                startActivity(Intent(Settings.ACTION_DATE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                retryOrStop("Android не открыл экран даты и времени.", SETTINGS_WAIT_RETRIES, SETTINGS_OPEN_DELAY_MS)
+            } else {
+                retryOrStop(
+                    "Экран даты и времени был закрыт или не стал активным. Цикл не будет снова открывать настройки.",
+                    SETTINGS_WAIT_RETRIES,
+                    SETTINGS_OPEN_DELAY_MS,
+                )
             }
-            startActivity(intent)
-            handler.postDelayed(driver, 1400L)
             return
         }
 
         if (turnOffAutomaticTimeIfNeeded(root)) {
-            handler.postDelayed(driver, 700L)
+            retryOrStop("Android применяет отключение автоматического времени.", DEFAULT_STAGE_RETRIES, AFTER_TOGGLE_DELAY_MS)
             return
         }
 
-        if (clickText(root, DATE_LABELS)) {
-            stage = Stage.OPEN_DATE_DIALOG
-            handler.postDelayed(driver, 600L)
+        if (clickManualSetting(root, DATE_LABELS)) {
+            moveTo(Stage.OPEN_DATE_DIALOG, DIALOG_OPEN_DELAY_MS)
             return
         }
-        handler.postDelayed(driver, 700L)
+
+        retryOrStop(
+            "Не найден пункт ручной установки даты. Проверьте, что автоматические дата и время выключены.",
+        )
     }
 
     private fun fillDateDialog() {
         val root = rootInActiveWindow ?: run {
-            handler.postDelayed(driver, 500L)
+            retryOrStop("Диалог выбора даты не открылся.")
             return
         }
 
-        if (!textModeRequested && clickText(root, DATE_TEXT_MODE_LABELS)) {
+        if (!textModeRequested) {
+            val modeButton = findControl(root, DATE_TEXT_MODE_LABELS)
+            if (modeButton != null && clickNode(modeButton)) {
+                textModeRequested = true
+                retryOrStop("Ожидается режим текстового ввода даты.", DEFAULT_STAGE_RETRIES, INPUT_MODE_DELAY_MS)
+                return
+            }
             textModeRequested = true
-            handler.postDelayed(driver, 400L)
-            return
         }
 
         val editable = findEditableNodes(root)
         if (editable.isEmpty()) {
-            handler.postDelayed(driver, 500L)
+            retryOrStop("В диалоге даты не найдены поля ввода. Возможно, оболочка телефона использует неподдерживаемый вид выбора даты.")
             return
         }
+
         val date = Date(targetMillis)
-        val localeIsRussian = Locale.getDefault().language.lowercase() == "ru"
-        val oneFieldValue = SimpleDateFormat(if (localeIsRussian) "dd.MM.yyyy" else "MM/dd/yyyy", Locale.getDefault()).format(date)
-        val calendar = java.util.Calendar.getInstance().apply { time = date }
-        val parts = if (localeIsRussian) {
+        val calendar = Calendar.getInstance().apply { time = date }
+        val dateParts = if (Locale.getDefault().language.lowercase() == "ru") {
             listOf(
-                String.format(Locale.US, "%02d", calendar.get(java.util.Calendar.DAY_OF_MONTH)),
-                String.format(Locale.US, "%02d", calendar.get(java.util.Calendar.MONTH) + 1),
-                calendar.get(java.util.Calendar.YEAR).toString(),
+                String.format(Locale.US, "%02d", calendar.get(Calendar.DAY_OF_MONTH)),
+                String.format(Locale.US, "%02d", calendar.get(Calendar.MONTH) + 1),
+                calendar.get(Calendar.YEAR).toString(),
             )
         } else {
             listOf(
-                String.format(Locale.US, "%02d", calendar.get(java.util.Calendar.MONTH) + 1),
-                String.format(Locale.US, "%02d", calendar.get(java.util.Calendar.DAY_OF_MONTH)),
-                calendar.get(java.util.Calendar.YEAR).toString(),
+                String.format(Locale.US, "%02d", calendar.get(Calendar.MONTH) + 1),
+                String.format(Locale.US, "%02d", calendar.get(Calendar.DAY_OF_MONTH)),
+                calendar.get(Calendar.YEAR).toString(),
             )
         }
+        val singleValue = SimpleDateFormat(
+            if (Locale.getDefault().language.lowercase() == "ru") "dd.MM.yyyy" else "MM/dd/yyyy",
+            Locale.getDefault(),
+        ).format(date)
 
-        if (editable.size == 1) {
-            setText(editable.first(), oneFieldValue)
+        val entered = if (editable.size == 1) {
+            setText(editable.first(), singleValue)
         } else {
-            editable.take(3).forEachIndexed { index, node -> setText(node, parts[index]) }
+            editable.take(3).mapIndexed { index, node -> setText(node, dateParts[index]) }.all { it }
+        }
+        if (!entered) {
+            retryOrStop("Android не принял значение даты в поле ввода.")
+            return
         }
 
-        if (clickText(rootInActiveWindow ?: root, CONFIRM_LABELS)) {
-            stage = Stage.OPEN_TIME
+        val currentRoot = rootInActiveWindow ?: root
+        if (clickConfirmation(currentRoot)) {
             textModeRequested = false
-            handler.postDelayed(driver, 650L)
+            moveTo(Stage.OPEN_TIME, AFTER_DATE_CONFIRM_DELAY_MS)
         } else {
-            handler.postDelayed(driver, 450L)
+            retryOrStop("Не найдена кнопка подтверждения даты.")
         }
     }
 
     private fun openTimeDialog() {
         val root = rootInActiveWindow ?: run {
-            handler.postDelayed(driver, 500L)
+            retryOrStop("После установки даты пропал экран системных настроек.")
             return
         }
-        if (clickText(root, TIME_LABELS)) {
-            stage = Stage.OPEN_TIME_DIALOG
-            handler.postDelayed(driver, 600L)
+        if (!isSettingsWindow(root)) {
+            retryOrStop("Экран даты и времени был закрыт до установки времени.")
             return
         }
-        handler.postDelayed(driver, 600L)
+        if (clickManualSetting(root, TIME_LABELS)) {
+            moveTo(Stage.OPEN_TIME_DIALOG, DIALOG_OPEN_DELAY_MS)
+        } else {
+            retryOrStop("Не найден пункт ручной установки времени.")
+        }
     }
 
     private fun fillTimeDialog() {
         val root = rootInActiveWindow ?: run {
-            handler.postDelayed(driver, 500L)
+            retryOrStop("Диалог выбора времени не открылся.")
             return
         }
-        if (!textModeRequested && clickText(root, TIME_TEXT_MODE_LABELS)) {
+
+        if (!textModeRequested) {
+            val modeButton = findControl(root, TIME_TEXT_MODE_LABELS)
+            if (modeButton != null && clickNode(modeButton)) {
+                textModeRequested = true
+                retryOrStop("Ожидается режим текстового ввода времени.", DEFAULT_STAGE_RETRIES, INPUT_MODE_DELAY_MS)
+                return
+            }
             textModeRequested = true
-            handler.postDelayed(driver, 400L)
-            return
         }
 
         val editable = findEditableNodes(root)
         if (editable.isEmpty()) {
-            handler.postDelayed(driver, 500L)
+            retryOrStop("В диалоге времени не найдены поля ввода. Возможно, оболочка телефона использует неподдерживаемый вид выбора времени.")
             return
         }
-        val formatted = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(targetMillis))
-        val calendar = java.util.Calendar.getInstance().apply { timeInMillis = targetMillis }
-        if (editable.size == 1) {
-            setText(editable.first(), formatted)
+
+        val calendar = Calendar.getInstance().apply { timeInMillis = targetMillis }
+        val entered = if (editable.size == 1) {
+            setText(editable.first(), SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(targetMillis)))
         } else {
-            setText(editable[0], String.format(Locale.US, "%02d", calendar.get(java.util.Calendar.HOUR_OF_DAY)))
-            setText(editable[1], String.format(Locale.US, "%02d", calendar.get(java.util.Calendar.MINUTE)))
+            setText(editable[0], String.format(Locale.US, "%02d", calendar.get(Calendar.HOUR_OF_DAY))) &&
+                setText(editable[1], String.format(Locale.US, "%02d", calendar.get(Calendar.MINUTE)))
+        }
+        if (!entered) {
+            retryOrStop("Android не принял значение времени в поле ввода.")
+            return
         }
 
-        if (clickText(rootInActiveWindow ?: root, CONFIRM_LABELS)) {
-            stage = Stage.VERIFY
-            handler.postDelayed(driver, 1300L)
+        val currentRoot = rootInActiveWindow ?: root
+        if (clickConfirmation(currentRoot)) {
+            moveTo(Stage.VERIFY, VERIFY_DELAY_MS)
         } else {
-            handler.postDelayed(driver, 450L)
+            retryOrStop("Не найдена кнопка подтверждения времени.")
         }
     }
 
     private fun verifyAppliedTime() {
-        val delta = abs(System.currentTimeMillis() - targetMillis)
-        val verified = delta <= 120_000L
-        val detail = if (verified) {
-            "Системное время подтверждено с допустимым отклонением."
+        val verified = abs(System.currentTimeMillis() - targetMillis) <= VERIFY_TOLERANCE_MS
+        if (verified) {
+            finishAttempt(true, "Системное время подтверждено с допустимым отклонением.")
         } else {
-            "Не удалось подтвердить значение по системным часам; проверьте экран даты и времени."
+            stopWithFailure("Введенное значение не подтверждено системными часами. Цикл остановлен, чтобы избежать повторных переходов в настройки.")
         }
-        finishAttempt(verified, detail)
+    }
+
+    private fun moveTo(nextStage: Stage, delayMillis: Long) {
+        stage = nextStage
+        stageRetries = 0
+        handler.postDelayed(driver, delayMillis)
+    }
+
+    private fun retryOrStop(
+        failureReason: String,
+        retryLimit: Int = DEFAULT_STAGE_RETRIES,
+        delayMillis: Long = RETRY_DELAY_MS,
+    ) {
+        stageRetries += 1
+        if (stageRetries >= retryLimit) {
+            stopWithFailure(failureReason)
+        } else {
+            handler.postDelayed(driver, delayMillis)
+        }
     }
 
     private fun finishAttempt(success: Boolean, detail: String) {
         handler.removeCallbacks(driver)
         TimeCycleStore.markAttemptFinished(this, targetMillis, success, detail)
         stage = Stage.IDLE
-        if (TimeCycleStore.isRunning(this)) {
+        if (success && TimeCycleStore.isRunning(this)) {
             beginFromStorage(TimeCycleStore.pauseMillis(this))
         }
     }
 
+    private fun stopWithFailure(detail: String) {
+        handler.removeCallbacks(driver)
+        TimeCycleStore.markAttemptFinished(this, targetMillis, false, detail)
+        TimeCycleStore.stop(this, "Автоматизация остановлена: требуется проверка экрана даты и времени на этом телефоне.")
+        stage = Stage.IDLE
+    }
+
     private fun turnOffAutomaticTimeIfNeeded(root: AccessibilityNodeInfo): Boolean {
-        val node = findByText(root, AUTOMATIC_TIME_LABELS) ?: return false
-        var container: AccessibilityNodeInfo? = node
+        val automaticNode = findControl(root, AUTOMATIC_TIME_LABELS) ?: return false
+        var container: AccessibilityNodeInfo? = automaticNode
         repeat(4) {
             val switch = container?.let(::findCheckableDescendant)
-            if (switch != null) {
-                return if (switch.isChecked) clickNode(switch) else false
-            }
+            if (switch != null) return switch.isChecked && clickNode(switch)
             container = container?.parent
         }
         return false
     }
+
+    private fun clickManualSetting(root: AccessibilityNodeInfo, labels: List<String>): Boolean {
+        val manualNode = findControl(root, labels, excludeAutomatic = true) ?: return false
+        return clickNode(manualNode)
+    }
+
+    private fun clickConfirmation(root: AccessibilityNodeInfo): Boolean =
+        findControl(root, CONFIRM_LABELS)?.let(::clickNode) ?: false
+
+    private fun isSettingsWindow(root: AccessibilityNodeInfo): Boolean =
+        root.packageName?.toString()?.contains("settings", ignoreCase = true) == true
+
+    private fun findControl(
+        root: AccessibilityNodeInfo,
+        labels: List<String>,
+        excludeAutomatic: Boolean = false,
+    ): AccessibilityNodeInfo? {
+        val normalizedLabels = labels.map(::normalize)
+        fun visit(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            val text = nodeLabel(node)
+            val exact = normalizedLabels.any { it == text }
+            val partial = normalizedLabels.any { label -> label.length > 2 && text.contains(label) }
+            val allowed = !excludeAutomatic || !looksAutomatic(text)
+            if (allowed && (exact || partial) && hasClickableAncestor(node)) return node
+            for (index in 0 until node.childCount) {
+                val result = node.getChild(index)?.let(::visit)
+                if (result != null) return result
+            }
+            return null
+        }
+        return visit(root)
+    }
+
+    private fun hasClickableAncestor(node: AccessibilityNodeInfo): Boolean {
+        var current: AccessibilityNodeInfo? = node
+        repeat(5) {
+            if (current?.isClickable == true) return true
+            current = current?.parent
+        }
+        return false
+    }
+
+    private fun nodeLabel(node: AccessibilityNodeInfo): String =
+        listOfNotNull(node.text?.toString(), node.contentDescription?.toString())
+            .joinToString(" ")
+            .let(::normalize)
+
+    private fun normalize(value: String): String = value.trim().lowercase()
+
+    private fun looksAutomatic(value: String): Boolean =
+        AUTOMATIC_MARKERS.any { marker -> value.contains(marker) }
 
     private fun findCheckableDescendant(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         if (node.isCheckable) return node
@@ -253,33 +364,13 @@ class TimeAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun isSettingsWindow(root: AccessibilityNodeInfo): Boolean =
-        root.packageName?.toString()?.contains("settings", ignoreCase = true) == true
-
-    private fun clickText(root: AccessibilityNodeInfo, labels: List<String>): Boolean {
-        val node = findByText(root, labels) ?: return false
-        return clickNode(node)
-    }
-
     private fun clickNode(node: AccessibilityNodeInfo): Boolean {
         var current: AccessibilityNodeInfo? = node
         repeat(5) {
-            if (current?.isClickable == true && current?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
-                return true
-            }
+            if (current?.isClickable == true && current?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
             current = current?.parent
         }
         return false
-    }
-
-    private fun findByText(root: AccessibilityNodeInfo, labels: List<String>): AccessibilityNodeInfo? {
-        val ownText = listOfNotNull(root.text?.toString(), root.contentDescription?.toString()).joinToString(" ").lowercase()
-        if (labels.any { ownText.contains(it.lowercase()) }) return root
-        for (index in 0 until root.childCount) {
-            val result = root.getChild(index)?.let { findByText(it, labels) }
-            if (result != null) return result
-        }
-        return null
     }
 
     private fun findEditableNodes(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
@@ -302,21 +393,35 @@ class TimeAccessibilityService : AccessibilityService() {
     private enum class Stage { IDLE, OPEN_SETTINGS, OPEN_DATE_DIALOG, OPEN_TIME, OPEN_TIME_DIALOG, VERIFY }
 
     companion object {
-        private const val FLOW_TIMEOUT_MS = 22_000L
+        private const val FLOW_TIMEOUT_MS = 30_000L
+        private const val INITIAL_DELAY_MS = 700L
+        private const val EVENT_SETTLE_DELAY_MS = 350L
+        private const val SETTINGS_OPEN_DELAY_MS = 1_200L
+        private const val AFTER_TOGGLE_DELAY_MS = 700L
+        private const val DIALOG_OPEN_DELAY_MS = 600L
+        private const val INPUT_MODE_DELAY_MS = 400L
+        private const val AFTER_DATE_CONFIRM_DELAY_MS = 700L
+        private const val VERIFY_DELAY_MS = 1_300L
+        private const val RETRY_DELAY_MS = 650L
+        private const val VERIFY_TOLERANCE_MS = 120_000L
+        private const val DEFAULT_STAGE_RETRIES = 7
+        private const val SETTINGS_WAIT_RETRIES = 5
+
         private var activeService: TimeAccessibilityService? = null
 
         private val AUTOMATIC_TIME_LABELS = listOf(
             "automatic date", "automatic time", "set time automatically", "use network-provided time",
-            "автоматическая дата", "автоматическое время", "использовать время сети",
+            "автоматическая дата", "автоматическое время", "использовать время сети", "автоматически",
         )
-        private val DATE_LABELS = listOf("set date", "установить дату")
-        private val TIME_LABELS = listOf("set time", "установить время")
-        private val CONFIRM_LABELS = listOf("ok", "готово", "подтвердить", "done")
+        private val AUTOMATIC_MARKERS = listOf("automatic", "network", "автомат", "сети")
+        private val DATE_LABELS = listOf("set date", "change date", "установить дату", "изменить дату", "дата")
+        private val TIME_LABELS = listOf("set time", "change time", "установить время", "изменить время", "время")
+        private val CONFIRM_LABELS = listOf("ok", "готово", "подтвердить", "done", "сохранить")
         private val DATE_TEXT_MODE_LABELS = listOf(
-            "switch to text input mode", "input mode", "режим ввода", "ввод даты",
+            "switch to text input mode", "input mode", "text input", "режим ввода", "ввод даты",
         )
         private val TIME_TEXT_MODE_LABELS = listOf(
-            "switch to text input mode", "keyboard input", "режим ввода", "ввод времени",
+            "switch to text input mode", "keyboard input", "input mode", "режим ввода", "ввод времени",
         )
 
         fun isServiceActive(): Boolean = activeService != null
