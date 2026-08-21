@@ -25,6 +25,7 @@ class TimeAccessibilityService : AccessibilityService() {
     private var stageRetries = 0
     private var settingsLaunchRequested = false
     private var textModeRequested = false
+    private val diagnosticStages = mutableSetOf<Stage>()
 
     private val driver = Runnable { driveAutomation() }
 
@@ -71,6 +72,7 @@ class TimeAccessibilityService : AccessibilityService() {
         stageRetries = 0
         settingsLaunchRequested = false
         textModeRequested = false
+        diagnosticStages.clear()
         TimeCycleStore.addEvent(
             this,
             "Начата попытка ${TimeCycleStore.completedCycles(this) + 1} из ${TimeCycleStore.totalCycles(this)}.",
@@ -137,7 +139,7 @@ class TimeAccessibilityService : AccessibilityService() {
         }
 
         if (!textModeRequested) {
-            val modeButton = findControl(root, DATE_TEXT_MODE_LABELS)
+            val modeButton = findTextInputToggle(root, DATE_TEXT_MODE_LABELS, DATE_INPUT_TOGGLE_IDS)
             if (modeButton != null && clickNode(modeButton)) {
                 textModeRequested = true
                 retryOrStop("Ожидается режим текстового ввода даты.", DEFAULT_STAGE_RETRIES, INPUT_MODE_DELAY_MS)
@@ -148,6 +150,7 @@ class TimeAccessibilityService : AccessibilityService() {
 
         val editable = findEditableNodes(root)
         if (editable.isEmpty()) {
+            logDialogDiagnostics(root, "Диагностика выбора даты")
             retryOrStop("В диалоге даты не найдены поля ввода. Возможно, оболочка телефона использует неподдерживаемый вид выбора даты.")
             return
         }
@@ -214,7 +217,7 @@ class TimeAccessibilityService : AccessibilityService() {
         }
 
         if (!textModeRequested) {
-            val modeButton = findControl(root, TIME_TEXT_MODE_LABELS)
+            val modeButton = findTextInputToggle(root, TIME_TEXT_MODE_LABELS, TIME_INPUT_TOGGLE_IDS)
             if (modeButton != null && clickNode(modeButton)) {
                 textModeRequested = true
                 retryOrStop("Ожидается режим текстового ввода времени.", DEFAULT_STAGE_RETRIES, INPUT_MODE_DELAY_MS)
@@ -225,6 +228,7 @@ class TimeAccessibilityService : AccessibilityService() {
 
         val editable = findEditableNodes(root)
         if (editable.isEmpty()) {
+            logDialogDiagnostics(root, "Диагностика выбора времени")
             retryOrStop("В диалоге времени не найдены поля ввода. Возможно, оболочка телефона использует неподдерживаемый вид выбора времени.")
             return
         }
@@ -312,6 +316,13 @@ class TimeAccessibilityService : AccessibilityService() {
     private fun clickConfirmation(root: AccessibilityNodeInfo): Boolean =
         findControl(root, CONFIRM_LABELS)?.let(::clickNode) ?: false
 
+    private fun findTextInputToggle(
+        root: AccessibilityNodeInfo,
+        labels: List<String>,
+        resourceSuffixes: List<String>,
+    ): AccessibilityNodeInfo? =
+        findControlByResourceSuffix(root, resourceSuffixes) ?: findControl(root, labels)
+
     private fun isSettingsWindow(root: AccessibilityNodeInfo): Boolean =
         root.packageName?.toString()?.contains("settings", ignoreCase = true) == true
 
@@ -334,6 +345,46 @@ class TimeAccessibilityService : AccessibilityService() {
             return null
         }
         return visit(root)
+    }
+
+    private fun findControlByResourceSuffix(
+        root: AccessibilityNodeInfo,
+        resourceSuffixes: List<String>,
+    ): AccessibilityNodeInfo? {
+        fun visit(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            val resourceName = node.viewIdResourceName?.lowercase().orEmpty()
+            if (
+                resourceSuffixes.any { suffix -> resourceName.endsWith(suffix) || resourceName.contains(suffix) } &&
+                hasClickableAncestor(node)
+            ) {
+                return node
+            }
+            for (index in 0 until node.childCount) {
+                val result = node.getChild(index)?.let(::visit)
+                if (result != null) return result
+            }
+            return null
+        }
+        return visit(root)
+    }
+
+    private fun logDialogDiagnostics(root: AccessibilityNodeInfo, title: String) {
+        if (!diagnosticStages.add(stage)) return
+        val details = mutableListOf<String>()
+        fun walk(node: AccessibilityNodeInfo, depth: Int) {
+            if (depth > 5 || details.size >= 24) return
+            val resource = node.viewIdResourceName?.substringAfterLast('/')
+            val label = nodeLabel(node)
+            if (!resource.isNullOrBlank() || label.isNotBlank()) {
+                details.add(
+                    "${resource ?: node.className?.toString()?.substringAfterLast('.') ?: "узел"}" +
+                        "[${label.take(40)}; кликаб=${node.isClickable}; редакт=${node.isEditable}]",
+                )
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let { walk(it, depth + 1) }
+        }
+        walk(root, 0)
+        TimeCycleStore.addEvent(this, "$title: ${details.joinToString(" | ").take(1_400)}")
     }
 
     private fun hasClickableAncestor(node: AccessibilityNodeInfo): Boolean {
@@ -418,10 +469,18 @@ class TimeAccessibilityService : AccessibilityService() {
         private val TIME_LABELS = listOf("set time", "change time", "установить время", "изменить время", "время")
         private val CONFIRM_LABELS = listOf("ok", "готово", "подтвердить", "done", "сохранить")
         private val DATE_TEXT_MODE_LABELS = listOf(
-            "switch to text input mode", "input mode", "text input", "режим ввода", "ввод даты",
+            "switch to text input mode", "input mode", "text input", "keyboard input",
+            "переключиться в режим текстового ввода", "режим текстового ввода", "ввод с клавиатуры", "режим ввода", "ввод даты",
         )
         private val TIME_TEXT_MODE_LABELS = listOf(
-            "switch to text input mode", "keyboard input", "input mode", "режим ввода", "ввод времени",
+            "switch to text input mode", "keyboard input", "input mode", "text input",
+            "переключиться в режим текстового ввода", "режим текстового ввода", "ввод с клавиатуры", "режим ввода", "ввод времени",
+        )
+        private val DATE_INPUT_TOGGLE_IDS = listOf(
+            "date_picker_header_toggle", "mtrl_picker_header_toggle", "date_picker_toggle", "toggle_mode",
+        )
+        private val TIME_INPUT_TOGGLE_IDS = listOf(
+            "input_mode", "time_picker_mode", "time_picker_header_toggle", "toggle_mode",
         )
 
         fun isServiceActive(): Boolean = activeService != null
