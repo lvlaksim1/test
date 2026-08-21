@@ -101,7 +101,7 @@ class TimeAccessibilityService : AccessibilityService() {
         } else {
             @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
         }
-        return "Сборка ${packageInfo.versionName} ($code), TRACE-20260821-1."
+        return "Сборка ${packageInfo.versionName} ($code), MIUI-WHEEL-20260821-2."
     }
 
     private fun returnToApp(note: String) {
@@ -170,13 +170,14 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private fun fillDateDialog() {
-        val root = rootInActiveWindow ?: run {
+        val root = findPickerRoot(::looksLikeDateDialog) ?: run {
             retryOrStop("Диалог выбора даты не открылся.")
             return
         }
 
         if (!looksLikeDateDialog(root)) {
             trace("date.dialog.missing", "Шаг 4/6: после нажатия «Дата» системный диалог не обнаружен; возвращаюсь к точной строке даты.")
+            logDialogDiagnostics(root, "Диагностика экрана после нажатия «Дата»")
             stage = Stage.OPEN_SETTINGS
             retryOrStop("Пункт «Дата» не открыл диалог выбора. Повторная попытка выполняется через точную строку даты.")
             return
@@ -234,7 +235,7 @@ class TimeAccessibilityService : AccessibilityService() {
             return
         }
 
-        val currentRoot = rootInActiveWindow ?: root
+        val currentRoot = findPickerRoot(::looksLikeDateDialog) ?: root
         if (clickConfirmation(currentRoot)) {
             textModeRequested = false
             moveTo(Stage.OPEN_TIME, AFTER_DATE_CONFIRM_DELAY_MS)
@@ -260,7 +261,7 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private fun fillTimeDialog() {
-        val root = rootInActiveWindow ?: run {
+        val root = findPickerRoot(::looksLikeTimeDialog) ?: run {
             retryOrStop("Диалог выбора времени не открылся.")
             return
         }
@@ -305,7 +306,7 @@ class TimeAccessibilityService : AccessibilityService() {
             return
         }
 
-        val currentRoot = rootInActiveWindow ?: root
+        val currentRoot = findPickerRoot(::looksLikeTimeDialog) ?: root
         if (clickConfirmation(currentRoot)) {
             moveTo(Stage.VERIFY, VERIFY_DELAY_MS)
         } else {
@@ -415,7 +416,8 @@ class TimeAccessibilityService : AccessibilityService() {
     private fun looksLikeDateDialog(root: AccessibilityNodeInfo): Boolean =
         findNodeByResourceSuffix(root, DATE_HEADER_IDS) != null ||
             findNodeByResourceSuffix(root, DAY_PAGER_IDS) != null ||
-            findWheelPickers(root).size >= 3
+            findWheelPickers(root).size >= 3 ||
+            findEditableNodes(root).size >= 3
 
     private fun looksLikeTimeDialog(root: AccessibilityNodeInfo): Boolean =
         findNodeByResourceSuffix(root, TIME_INPUT_TOGGLE_IDS) != null ||
@@ -431,6 +433,10 @@ class TimeAccessibilityService : AccessibilityService() {
         val expectedCount = if (mode == WheelPickerMode.DATE) 3 else 2
         if (wheels.size < expectedCount) return false
 
+        trace(
+            "wheels.${mode.name}",
+            "Обнаружены колесные селекторы ${if (mode == WheelPickerMode.DATE) "даты" else "времени"}; применяю целевые значения.",
+        )
         wheelPickerMode = mode
         val calendar = Calendar.getInstance().apply { timeInMillis = targetMillis }
         val targets = if (mode == WheelPickerMode.DATE) {
@@ -454,7 +460,9 @@ class TimeAccessibilityService : AccessibilityService() {
             return true
         }
 
-        val currentRoot = rootInActiveWindow ?: root
+        val currentRoot = findPickerRoot {
+            if (mode == WheelPickerMode.DATE) looksLikeDateDialog(it) else looksLikeTimeDialog(it)
+        } ?: root
         if (!clickConfirmation(currentRoot)) {
             retryOrStop("Не найдена кнопка подтверждения колесного выбора.")
             return true
@@ -476,10 +484,7 @@ class TimeAccessibilityService : AccessibilityService() {
             val className = node.className?.toString()?.lowercase().orEmpty()
             val resourceName = node.viewIdResourceName?.lowercase().orEmpty()
             val isNumberPicker = className.endsWith("numberpicker") || resourceName.contains("numberpicker")
-            val canScroll = node.actionList.any { action ->
-                action.id == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD || action.id == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-            }
-            if (isNumberPicker && canScroll) {
+            if (isNumberPicker) {
                 result.add(node)
                 return
             }
@@ -499,30 +504,60 @@ class TimeAccessibilityService : AccessibilityService() {
         } else {
             AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
         }
-        return if (wheel.performAction(action)) WheelUpdate.ADJUSTING else WheelUpdate.FAILED
+        return if (wheel.performAction(action) || swipeWheel(wheel, target > current)) {
+            WheelUpdate.ADJUSTING
+        } else {
+            WheelUpdate.FAILED
+        }
+    }
+
+    private fun swipeWheel(wheel: AccessibilityNodeInfo, forward: Boolean): Boolean {
+        val bounds = Rect().also(wheel::getBoundsInScreen)
+        if (bounds.width() < 8 || bounds.height() < 24) return false
+        val x = bounds.centerX().toFloat()
+        val distance = (bounds.height() * 0.28f).coerceAtLeast(18f)
+        val startY = if (forward) bounds.centerY() + distance else bounds.centerY() - distance
+        val endY = if (forward) bounds.centerY() - distance else bounds.centerY() + distance
+        val path = Path().apply {
+            moveTo(x, startY)
+            lineTo(x, endY)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 150))
+            .build()
+        return dispatchGesture(gesture, null, null)
     }
 
     private fun readWheelValue(wheel: AccessibilityNodeInfo): Int? {
         val editable = findEditableNodes(wheel).firstOrNull()
-        val fromInput = editable?.let(::nodeLabel)?.let(::parseWheelNumber)
+        val fromInput = editable?.let(::nodeLabel)?.let(::parseWheelValue)
         if (fromInput != null) return fromInput
 
         val candidates = mutableListOf<Pair<Int, String>>()
         val wheelBounds = Rect().also(wheel::getBoundsInScreen)
         fun visit(node: AccessibilityNodeInfo) {
             val label = nodeLabel(node)
-            if (parseWheelNumber(label) != null) {
+            if (parseWheelValue(label) != null) {
                 val bounds = Rect().also(node::getBoundsInScreen)
                 candidates.add(kotlin.math.abs(bounds.centerY() - wheelBounds.centerY()) to label)
             }
             for (index in 0 until node.childCount) node.getChild(index)?.let(::visit)
         }
         visit(wheel)
-        return candidates.minByOrNull { it.first }?.second?.let(::parseWheelNumber)
+        return candidates.minByOrNull { it.first }?.second?.let(::parseWheelValue)
     }
 
     private fun parseWheelNumber(value: String): Int? =
         Regex("-?\\d{1,4}").find(value)?.value?.toIntOrNull()
+
+    private fun parseWheelValue(value: String): Int? {
+        parseWheelNumber(value)?.let { return it }
+        val normalizedValue = normalize(value)
+        val monthIndex = WHEEL_MONTH_NAMES.indexOfFirst { names ->
+            names.any { name -> normalizedValue.contains(name) }
+        }
+        return monthIndex.takeIf { it >= 0 }?.plus(1)
+    }
 
     private fun selectDateInCalendar(root: AccessibilityNodeInfo): Boolean {
         val target = Calendar.getInstance().apply { timeInMillis = targetMillis }
@@ -694,6 +729,17 @@ class TimeAccessibilityService : AccessibilityService() {
 
     private fun isSettingsWindow(root: AccessibilityNodeInfo): Boolean =
         root.packageName?.toString()?.contains("settings", ignoreCase = true) == true
+
+    private fun findPickerRoot(
+        matcher: (AccessibilityNodeInfo) -> Boolean,
+    ): AccessibilityNodeInfo? {
+        val roots = mutableListOf<AccessibilityNodeInfo>()
+        windows.forEach { window -> window.root?.let(roots::add) }
+        rootInActiveWindow?.let { activeRoot ->
+            if (roots.none { it == activeRoot }) roots.add(activeRoot)
+        }
+        return roots.firstOrNull(matcher) ?: roots.firstOrNull()
+    }
 
     private fun findControl(
         root: AccessibilityNodeInfo,
@@ -893,6 +939,20 @@ class TimeAccessibilityService : AccessibilityService() {
         private val PREVIOUS_MONTH_LABELS = listOf("previous month", "предыдущий месяц")
         private val DISPLAY_MONTHS = listOf(
             "январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+        )
+        private val WHEEL_MONTH_NAMES = listOf(
+            listOf("янв", "январ", "jan", "january"),
+            listOf("фев", "feb", "february"),
+            listOf("мар", "mar", "march"),
+            listOf("апр", "apr", "april"),
+            listOf("май", "may"),
+            listOf("июн", "jun", "june"),
+            listOf("июл", "jul", "july"),
+            listOf("авг", "aug", "august"),
+            listOf("сен", "sep", "sept", "september"),
+            listOf("окт", "oct", "october"),
+            listOf("ноя", "nov", "november"),
+            listOf("дек", "dec", "december"),
         )
         private val DAY_MONTH_NAMES = listOf(
             listOf("января"), listOf("февраля"), listOf("марта"), listOf("апреля"), listOf("мая"), listOf("июня"),
