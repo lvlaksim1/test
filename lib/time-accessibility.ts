@@ -19,6 +19,7 @@ export type AccessibilityStatus = {
 type NativeTimeAccessibility = {
   getStatus: () => Promise<AccessibilityStatus>;
   openAccessibilitySettings: () => Promise<boolean>;
+  openTimeSynchronizationSettings: () => Promise<boolean>;
   startCycle: (config: CycleConfig) => Promise<AccessibilityStatus>;
   stopCycle: () => Promise<AccessibilityStatus>;
   clearEvents: () => Promise<boolean>;
@@ -44,6 +45,11 @@ export async function getAccessibilityStatus(): Promise<AccessibilityStatus> {
 export async function openAccessibilitySettings(): Promise<boolean> {
   if (!nativeModule) throw new Error("Служба доступности доступна только в собранном Android APK.");
   return nativeModule.openAccessibilitySettings();
+}
+
+export async function openTimeSynchronizationSettings(): Promise<boolean> {
+  if (!nativeModule) throw new Error("Настройки синхронизации доступны только в собранном Android APK.");
+  return nativeModule.openTimeSynchronizationSettings();
 }
 
 export async function startAccessibilityCycle(config: CycleConfig): Promise<AccessibilityStatus> {

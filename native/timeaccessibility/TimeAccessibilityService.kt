@@ -170,6 +170,12 @@ class TimeAccessibilityService : AccessibilityService() {
             return
         }
 
+        if (!looksLikeDateDialog(root)) {
+            stage = Stage.OPEN_SETTINGS
+            retryOrStop("Пункт «Дата» не открыл диалог выбора. Повторная попытка выполняется через точную строку даты.")
+            return
+        }
+
         if (!textModeRequested) {
             val modeButton = findTextInputToggle(root, DATE_TEXT_MODE_LABELS, DATE_INPUT_TOGGLE_IDS)
             if (modeButton != null && clickNode(modeButton)) {
@@ -249,6 +255,12 @@ class TimeAccessibilityService : AccessibilityService() {
     private fun fillTimeDialog() {
         val root = rootInActiveWindow ?: run {
             retryOrStop("Диалог выбора времени не открылся.")
+            return
+        }
+
+        if (!looksLikeTimeDialog(root)) {
+            stage = Stage.OPEN_TIME
+            retryOrStop("Пункт «Время» не открыл диалог выбора. Повторная попытка выполняется через точную строку времени.")
             return
         }
 
@@ -340,7 +352,7 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private fun turnOffAutomaticTimeIfNeeded(root: AccessibilityNodeInfo): Boolean {
-        val automaticNode = findControl(root, AUTOMATIC_TIME_LABELS) ?: return false
+        val automaticNode = findExactControl(root, AUTOMATIC_TIME_LABELS) ?: return false
         var container: AccessibilityNodeInfo? = automaticNode
         repeat(4) {
             val switch = container?.let(::findCheckableDescendant)
@@ -351,9 +363,19 @@ class TimeAccessibilityService : AccessibilityService() {
     }
 
     private fun clickManualSetting(root: AccessibilityNodeInfo, labels: List<String>): Boolean {
-        val manualNode = findControl(root, labels, excludeAutomatic = true) ?: return false
+        val manualNode = findExactControl(root, labels) ?: return false
         return clickNode(manualNode)
     }
+
+    private fun looksLikeDateDialog(root: AccessibilityNodeInfo): Boolean =
+        findNodeByResourceSuffix(root, DATE_HEADER_IDS) != null ||
+            findNodeByResourceSuffix(root, DAY_PAGER_IDS) != null ||
+            findWheelPickers(root).size >= 3
+
+    private fun looksLikeTimeDialog(root: AccessibilityNodeInfo): Boolean =
+        findNodeByResourceSuffix(root, TIME_INPUT_TOGGLE_IDS) != null ||
+            findWheelPickers(root).size >= 2 ||
+            findEditableNodes(root).isNotEmpty()
 
     private fun clickConfirmation(root: AccessibilityNodeInfo): Boolean =
         (findControlByResourceSuffix(root, CONFIRM_BUTTON_IDS) ?: findControl(root, CONFIRM_LABELS))
@@ -649,6 +671,19 @@ class TimeAccessibilityService : AccessibilityService() {
         return visit(root)
     }
 
+    private fun findExactControl(root: AccessibilityNodeInfo, labels: List<String>): AccessibilityNodeInfo? {
+        val normalizedLabels = labels.map(::normalize).toSet()
+        fun visit(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            if (nodeLabel(node) in normalizedLabels && hasClickableAncestor(node)) return node
+            for (index in 0 until node.childCount) {
+                val result = node.getChild(index)?.let(::visit)
+                if (result != null) return result
+            }
+            return null
+        }
+        return visit(root)
+    }
+
     private fun findControlByResourceSuffix(
         root: AccessibilityNodeInfo,
         resourceSuffixes: List<String>,
@@ -783,6 +818,7 @@ class TimeAccessibilityService : AccessibilityService() {
         private val AUTOMATIC_TIME_LABELS = listOf(
             "automatic date", "automatic time", "set time automatically", "use network-provided time",
             "автоматическая дата", "автоматическое время", "использовать время сети", "автоматически",
+            "настраивать время автоматически",
         )
         private val AUTOMATIC_MARKERS = listOf("automatic", "network", "автомат", "сети")
         private val DATE_LABELS = listOf("set date", "change date", "установить дату", "изменить дату", "дата")

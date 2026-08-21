@@ -40,6 +40,20 @@ class TimeAccessibilityModule(private val context: ReactApplicationContext) : Re
     }
 
     @ReactMethod
+    fun openTimeSynchronizationSettings(promise: Promise) {
+        runCatching {
+            val intent = Intent(Settings.ACTION_DATE_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        }.onSuccess {
+            promise.resolve(true)
+        }.onFailure {
+            promise.reject("OPEN_TIME_SETTINGS_FAILED", "Не удалось открыть настройки синхронизации времени.", it)
+        }
+    }
+
+    @ReactMethod
     fun startCycle(settings: ReadableMap, promise: Promise) {
         if (!TimeAccessibilityService.isServiceActive()) {
             promise.reject("ACCESSIBILITY_DISABLED", "Сначала вручную включите службу в специальных возможностях Android.")
