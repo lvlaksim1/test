@@ -3,6 +3,10 @@ name: Android APK
 
 
 
+
+
+
+
 on:
   workflow_dispatch:
   push:
@@ -23,8 +27,16 @@ on:
 
 
 
+
+
+
+
 permissions:
   contents: read
+
+
+
+
 
 
 
@@ -38,6 +50,10 @@ jobs:
 
 
 
+
+
+
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -45,8 +61,16 @@ jobs:
 
 
 
+
+
+
+
       - name: Apply checked source overlay
         run: unzip -oq source-overlay-1.0.16.zip -d .
+
+
+
+
 
 
 
@@ -59,23 +83,29 @@ jobs:
 
 
 
+
+
+
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
+
+      - name: Install Android SDK platform
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Build release APK
+        run: cd android && ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          node-version: 22
-          cache: pnpm
-
-
-
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-
-
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+          name: cyclic-time-apk-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
