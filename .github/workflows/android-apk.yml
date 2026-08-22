@@ -14,6 +14,7 @@ on:
       - "app/**"
       - "components/**"
       - "lib/**"
+      - "source-overlay-1.0.15.zip"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -28,6 +29,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Apply checked source overlay
+        run: unzip -q source-overlay-1.0.15.zip -d .
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
