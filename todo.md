@@ -54,3 +54,4 @@
 - [x] Исправить GitHub Actions workflow: настроить pnpm до включения кеша pnpm в Node.js шаге.
 - [x] Исправить GitHub Actions workflow: убрать Gradle-кеш из шага Java до выполнения Expo prebuild.
 - [x] Исправить генерацию AIDL-интерфейса ITimeShizukuService для Kotlin-кода Shizuku.
+- [ ] Исправить запуск Shizuku UserService: задать обязательный суффикс имени процесса и проверить подключение на телефоне.

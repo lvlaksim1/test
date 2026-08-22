@@ -23,7 +23,8 @@ data class ShizukuCommandOutcome(
 object TimeShizukuController {
     private const val REQUEST_CODE = 7201
     private const val SERVICE_TAG = "time-cycler-direct-time-v1"
-    private const val SERVICE_VERSION = 1
+    private const val SERVICE_VERSION = 2
+    private const val SERVICE_PROCESS_SUFFIX = "timecycler"
 
     private val lock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -85,6 +86,7 @@ object TimeShizukuController {
                 Shizuku.UserServiceArgs(ComponentName(context, TimeShizukuUserService::class.java))
                     .tag(SERVICE_TAG)
                     .version(SERVICE_VERSION)
+                    .processNameSuffix(SERVICE_PROCESS_SUFFIX)
                     .daemon(false),
                 connection,
             )
