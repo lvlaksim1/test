@@ -39,11 +39,13 @@ type FieldProps = {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
+  onFocus?: () => void;
   placeholder?: string;
   keyboardType?: "default" | "number-pad";
+  editable?: boolean;
 };
 
-function Field({ label, value, onChangeText, placeholder = "", keyboardType = "default" }: FieldProps) {
+function Field({ label, value, onChangeText, onFocus, placeholder = "", keyboardType = "default", editable = true }: FieldProps) {
   const colors = useColors();
   return (
     <View style={styles.fieldWrap}>
@@ -51,47 +53,29 @@ function Field({ label, value, onChangeText, placeholder = "", keyboardType = "d
       <TextInput
         value={value}
         onChangeText={onChangeText}
+        onFocus={onFocus}
         placeholder={placeholder}
         placeholderTextColor={colors.muted}
         keyboardType={keyboardType}
         returnKeyType="done"
+        editable={editable}
         style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
       />
     </View>
   );
 }
 
-function CycleCountField({ value, onChangeText, onAdjust, disabled }: {
-  value: string;
-  onChangeText: (value: string) => void;
-  onAdjust: (delta: number) => void;
-  disabled: boolean;
-}) {
-  const colors = useColors();
-  return (
-    <View style={styles.fieldWrap}>
-      <Text style={[styles.fieldLabel, { color: colors.muted }]}>Циклов</Text>
-      <View style={[styles.countInput, { backgroundColor: colors.background, borderColor: colors.border }]}>
-        <TextInput
-          value={value}
-          onChangeText={onChangeText}
-          keyboardType="number-pad"
-          returnKeyType="done"
-          editable={!disabled}
-          style={[styles.countTextInput, { color: colors.text }]}
-        />
-        <View style={[styles.countStepper, { borderLeftColor: colors.border }]}>
-          <Pressable disabled={disabled} onPress={() => onAdjust(1)} style={({ pressed }) => [styles.stepperButton, pressed && styles.pressed]}>
-            <Text style={[styles.stepperGlyph, { color: colors.primary }]}>⌃</Text>
-          </Pressable>
-          <Pressable disabled={disabled} onPress={() => onAdjust(-1)} style={({ pressed }) => [styles.stepperButton, { borderTopColor: colors.border }, pressed && styles.pressed]}>
-            <Text style={[styles.stepperGlyph, { color: colors.primary }]}>⌄</Text>
-          </Pressable>
-        </View>
-      </View>
-    </View>
-  );
-}
+type AdjustableField = keyof CycleForm;
+
+const fieldTitles: Record<AdjustableField, string> = {
+  date: "Дата",
+  time: "Время",
+  stepDays: "Дней",
+  stepHours: "Часов",
+  stepMinutes: "Минут",
+  pauseSeconds: "Пауза",
+  totalCycles: "Циклов",
+};
 
 export default function HomeScreen() {
   const colors = useColors();
@@ -99,6 +83,7 @@ export default function HomeScreen() {
   const [status, setStatus] = useState<AccessibilityStatus>(initialStatus);
   const [isBusy, setIsBusy] = useState(false);
   const [isLogExpanded, setIsLogExpanded] = useState(false);
+  const [activeField, setActiveField] = useState<AdjustableField | null>(null);
 
   const refreshStatus = useCallback(async () => {
     try { setStatus(await getAccessibilityStatus()); } catch { /* Service may be restarting. */ }
@@ -147,10 +132,42 @@ export default function HomeScreen() {
 
   const updateField = (field: keyof CycleForm) => (value: string) => persistForm((previous) => ({ ...previous, [field]: value }));
   const setCurrentStart = () => persistForm((previous) => ({ ...previous, ...toFormStart(Date.now()) }));
-  const adjustCycleCount = (delta: number) => persistForm((previous) => {
-    const numeric = /^\d+$/.test(previous.totalCycles.trim()) ? Number(previous.totalCycles) : 1;
-    return { ...previous, totalCycles: String(Math.max(1, Math.min(1000, numeric + delta))) };
-  });
+
+  const adjustActiveField = (delta: number) => {
+    if (!activeField || running) return;
+    persistForm((previous) => {
+      if (activeField === "date" || activeField === "time") {
+        const dateMatch = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(previous.date.trim());
+        const timeMatch = /^(\d{2}):(\d{2})$/.exec(previous.time.trim());
+        if (!dateMatch || !timeMatch) return previous;
+        const candidate = new Date(
+          Number(dateMatch[3]),
+          Number(dateMatch[2]) - 1,
+          Number(dateMatch[1]),
+          Number(timeMatch[1]),
+          Number(timeMatch[2]),
+          0,
+          0,
+        );
+        if (
+          candidate.getFullYear() !== Number(dateMatch[3]) ||
+          candidate.getMonth() !== Number(dateMatch[2]) - 1 ||
+          candidate.getDate() !== Number(dateMatch[1])
+        ) return previous;
+        if (activeField === "date") candidate.setDate(candidate.getDate() + delta);
+        else candidate.setMinutes(candidate.getMinutes() + delta);
+        return { ...previous, ...toFormStart(candidate.getTime()) };
+      }
+
+      const currentValue = previous[activeField].trim();
+      const numeric = /^-?\d+$/.test(currentValue) ? Number(currentValue) : 0;
+      let next = numeric + delta;
+      if (activeField === "pauseSeconds") next = Math.max(0, next);
+      if (activeField === "totalCycles") next = Math.max(1, Math.min(1000, next || 1));
+      return { ...previous, [activeField]: String(next) };
+    });
+    if (Platform.OS !== "web") void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
 
   const handleOpenServiceSettings = async () => {
     try { await openAccessibilitySettings(); } catch (error) {
@@ -275,25 +292,25 @@ export default function HomeScreen() {
               </Pressable>
             </View>
             <View style={styles.row}>
-              <View style={styles.rowPrimary}><Field label="Дата" value={form.date} onChangeText={updateField("date")} placeholder="ДД.ММ.ГГГГ" /></View>
-              <View style={styles.rowSecondary}><Field label="Время" value={form.time} onChangeText={updateField("time")} placeholder="ЧЧ:ММ" /></View>
+              <View style={styles.rowPrimary}><Field label="Дата" value={form.date} onChangeText={updateField("date")} onFocus={() => setActiveField("date")} placeholder="ДД.ММ.ГГГГ" editable={!running} /></View>
+              <View style={styles.rowSecondary}><Field label="Время" value={form.time} onChangeText={updateField("time")} onFocus={() => setActiveField("time")} placeholder="ЧЧ:ММ" editable={!running} /></View>
             </View>
           </View>
 
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>Шаг изменения</Text>
             <View style={styles.tripleRow}>
-              <Field label="Дней" value={form.stepDays} onChangeText={updateField("stepDays")} />
-              <Field label="Часов" value={form.stepHours} onChangeText={updateField("stepHours")} />
-              <Field label="Минут" value={form.stepMinutes} onChangeText={updateField("stepMinutes")} />
+              <Field label="Дней" value={form.stepDays} onChangeText={updateField("stepDays")} onFocus={() => setActiveField("stepDays")} editable={!running} />
+              <Field label="Часов" value={form.stepHours} onChangeText={updateField("stepHours")} onFocus={() => setActiveField("stepHours")} editable={!running} />
+              <Field label="Минут" value={form.stepMinutes} onChangeText={updateField("stepMinutes")} onFocus={() => setActiveField("stepMinutes")} editable={!running} />
             </View>
           </View>
 
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>Повторение</Text>
             <View style={styles.row}>
-              <View style={styles.rowPrimary}><Field label="Пауза, сек." value={form.pauseSeconds} onChangeText={updateField("pauseSeconds")} keyboardType="number-pad" /></View>
-              <View style={styles.rowSecondary}><CycleCountField value={form.totalCycles} onChangeText={updateField("totalCycles")} onAdjust={adjustCycleCount} disabled={running} /></View>
+              <View style={styles.rowPrimary}><Field label="Пауза, сек." value={form.pauseSeconds} onChangeText={updateField("pauseSeconds")} onFocus={() => setActiveField("pauseSeconds")} keyboardType="number-pad" editable={!running} /></View>
+              <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalCycles} onChangeText={updateField("totalCycles")} onFocus={() => setActiveField("totalCycles")} keyboardType="number-pad" editable={!running} /></View>
             </View>
           </View>
 
@@ -321,6 +338,18 @@ export default function HomeScreen() {
         </ScrollView>
 
         <View style={[styles.footer, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
+          <View style={styles.adjusterWrap}>
+            <Text style={[styles.adjusterLabel, { color: colors.muted }]}>{activeField ? `Изменить: ${fieldTitles[activeField]}` : "Выберите поле для изменения"}</Text>
+            <View style={[styles.adjuster, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <Pressable disabled={running || !activeField} onPress={() => adjustActiveField(-1)} style={({ pressed }) => [styles.adjusterButton, (pressed || running || !activeField) && styles.pressed]}>
+                <Text style={[styles.adjusterGlyph, { color: colors.primary }]}>−</Text>
+              </Pressable>
+              <View style={[styles.adjusterDivider, { backgroundColor: colors.border }]} />
+              <Pressable disabled={running || !activeField} onPress={() => adjustActiveField(1)} style={({ pressed }) => [styles.adjusterButton, (pressed || running || !activeField) && styles.pressed]}>
+                <Text style={[styles.adjusterGlyph, { color: colors.primary }]}>+</Text>
+              </Pressable>
+            </View>
+          </View>
           {running ? (
             <Pressable disabled={isBusy} onPress={handleEmergencyStop} style={({ pressed }) => [styles.stopButton, { backgroundColor: colors.error }, (pressed || isBusy) && styles.pressed]}>
               <Text style={styles.primaryButtonText}>Цикл {activeCycle} из {status.totalCycles} · остановить</Text>
@@ -345,7 +374,6 @@ const styles = StyleSheet.create({
   automaticTimeRow: { borderTopWidth: 1, paddingTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, automaticTimeText: { flex: 1, paddingRight: 8 }, automaticTimeTitle: { fontSize: 13, fontWeight: "800" }, automaticTimeHint: { fontSize: 11, marginTop: 2 },
   card: { borderRadius: 14, padding: 12, borderWidth: 1 }, cardHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, cardTitle: { fontSize: 15, lineHeight: 20, fontWeight: "800" }, nowButton: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 }, nowButtonText: { fontSize: 12, fontWeight: "800" },
   row: { flexDirection: "row", gap: 8, marginTop: 9 }, rowPrimary: { flex: 1.35 }, rowSecondary: { flex: 1 }, tripleRow: { flexDirection: "row", gap: 7, marginTop: 9 }, fieldWrap: { flex: 1 }, fieldLabel: { fontSize: 11, fontWeight: "700", marginBottom: 4 }, input: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, height: 38, fontSize: 14, fontWeight: "700" },
-  countInput: { height: 38, borderWidth: 1, borderRadius: 9, flexDirection: "row", overflow: "hidden" }, countTextInput: { flex: 1, paddingHorizontal: 9, fontSize: 14, fontWeight: "700" }, countStepper: { width: 30, borderLeftWidth: 1 }, stepperButton: { flex: 1, alignItems: "center", justifyContent: "center" }, stepperGlyph: { fontSize: 14, fontWeight: "900", lineHeight: 14 },
   logCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" }, logToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12 }, chevron: { fontSize: 20, lineHeight: 20, fontWeight: "800" }, logActions: { flexDirection: "row", gap: 6, paddingHorizontal: 12, paddingBottom: 8 }, textAction: { paddingVertical: 5, paddingHorizontal: 7 }, textActionLabel: { fontSize: 12, fontWeight: "800" }, emptyLogText: { fontSize: 13, paddingHorizontal: 12, paddingBottom: 12 }, logItem: { marginHorizontal: 10, marginBottom: 7, borderRadius: 10, padding: 9 }, logTime: { fontSize: 10, fontWeight: "800", marginBottom: 3 }, logMessage: { fontSize: 12, lineHeight: 16 },
-  footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1 }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
+  footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, gap: 9 }, adjusterWrap: { gap: 5 }, adjusterLabel: { textAlign: "center", fontSize: 11, fontWeight: "800" }, adjuster: { height: 54, flexDirection: "row", borderRadius: 14, borderWidth: 1, overflow: "hidden" }, adjusterButton: { flex: 1, alignItems: "center", justifyContent: "center" }, adjusterDivider: { width: 1 }, adjusterGlyph: { fontSize: 32, lineHeight: 36, fontWeight: "700" }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
 });
