@@ -48,8 +48,9 @@ export function parseCycleForm(form: CycleForm): { config?: CycleConfig; error?:
   ] as const;
   const values: number[] = [];
   for (const [name, raw, min, max] of numericFields) {
-    if (!INTEGER_PATTERN.test(raw.trim())) return { error: `Поле «${name}» должно содержать целое число.` };
-    const value = Number(raw);
+    const normalized = raw.trim() === "" ? "0" : raw.trim();
+    if (!INTEGER_PATTERN.test(normalized)) return { error: `Поле «${name}» должно содержать целое число.` };
+    const value = Number(normalized);
     if (value < min || value > max) return { error: `Поле «${name}» должно быть в диапазоне ${min}–${max}.` };
     values.push(value);
   }

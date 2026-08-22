@@ -1,4 +1,4 @@
-import type { CycleEvent } from "@/lib/time-accessibility";
+import type { CycleEvent } from "@/lib/time-control";
 
 export function formatJournalForCopy(events: CycleEvent[]): string {
   const header = [

@@ -2,28 +2,26 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, AppState, FlatList, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { Alert, AppState, FlatList, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from "react-native";
 
 import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
 import { type CycleForm, formatDateTime, getDefaultForm, parseCycleForm, toFormStart } from "@/lib/cycle-utils";
 import { formatJournalForCopy } from "@/lib/journal-export";
 import {
-  clearAccessibilityEvents,
-  getAccessibilityStatus,
-  isNativeAccessibilityAvailable,
+  clearTimeEvents,
+  getTimeControlStatus,
+  isNativeTimeControlAvailable,
   requestShizukuPermission,
   setAutomaticTime,
-  startAccessibilityCycle,
-  stopAccessibilityCycle,
-  type AccessibilityStatus,
-} from "@/lib/time-accessibility";
-import { openAccessibilitySettings } from "@/lib/time-accessibility";
+  startTimeCycle,
+  stopTimeCycle,
+  type TimeControlStatus,
+} from "@/lib/time-control";
 
 const FORM_STORAGE_KEY = "time-cycler-form-v1";
 
-const initialStatus: AccessibilityStatus = {
-  isAccessibilityEnabled: false,
+const initialStatus: TimeControlStatus = {
   isShizukuRunning: false,
   isShizukuPermissionGranted: false,
   isAutomaticTimeEnabled: true,
@@ -41,7 +39,7 @@ type FieldProps = {
   onChangeText: (value: string) => void;
   onFocus?: () => void;
   placeholder?: string;
-  keyboardType?: "default" | "number-pad";
+  keyboardType?: TextInputProps["keyboardType"];
   editable?: boolean;
 };
 
@@ -57,6 +55,7 @@ function Field({ label, value, onChangeText, onFocus, placeholder = "", keyboard
         placeholder={placeholder}
         placeholderTextColor={colors.muted}
         keyboardType={keyboardType}
+        inputMode={keyboardType === "default" ? "text" : "numeric"}
         returnKeyType="done"
         editable={editable}
         style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
@@ -66,6 +65,7 @@ function Field({ label, value, onChangeText, onFocus, placeholder = "", keyboard
 }
 
 type AdjustableField = keyof CycleForm;
+type NumericField = Exclude<AdjustableField, "date" | "time">;
 
 const fieldTitles: Record<AdjustableField, string> = {
   date: "Дата",
@@ -77,16 +77,23 @@ const fieldTitles: Record<AdjustableField, string> = {
   totalCycles: "Циклов",
 };
 
+function normalizeNumericInput(value: string, allowNegative: boolean): string {
+  const stripped = value.replace(/[^\d-]/g, "");
+  const hasMinus = allowNegative && stripped.startsWith("-");
+  const digits = stripped.replace(/-/g, "");
+  return hasMinus ? `-${digits}` : digits;
+}
+
 export default function HomeScreen() {
   const colors = useColors();
   const [form, setForm] = useState<CycleForm>(() => getDefaultForm());
-  const [status, setStatus] = useState<AccessibilityStatus>(initialStatus);
+  const [status, setStatus] = useState<TimeControlStatus>(initialStatus);
   const [isBusy, setIsBusy] = useState(false);
   const [isLogExpanded, setIsLogExpanded] = useState(false);
   const [activeField, setActiveField] = useState<AdjustableField | null>(null);
 
   const refreshStatus = useCallback(async () => {
-    try { setStatus(await getAccessibilityStatus()); } catch { /* Service may be restarting. */ }
+    try { setStatus(await getTimeControlStatus()); } catch { /* Shizuku may be restarting. */ }
   }, []);
 
   const persistForm = useCallback((updater: (previous: CycleForm) => CycleForm) => {
@@ -105,7 +112,7 @@ export default function HomeScreen() {
   }, [refreshStatus]);
 
   useEffect(() => {
-    const interval = setInterval(() => void refreshStatus(), status.isRunning ? 1200 : 4000);
+    const interval = setInterval(() => void refreshStatus(), status.isRunning ? 700 : 4000);
     return () => clearInterval(interval);
   }, [refreshStatus, status.isRunning]);
 
@@ -117,20 +124,22 @@ export default function HomeScreen() {
   }, [refreshStatus]);
 
   useEffect(() => {
-    if (!status.lastAppliedMillis || status.isRunning || status.totalCycles < 1 || status.completedCycles !== status.totalCycles) return;
-    const completedStart = toFormStart(status.lastAppliedMillis);
-    persistForm((previous) => previous.date === completedStart.date && previous.time === completedStart.time
+    if (!status.lastAppliedMillis) return;
+    const appliedStart = toFormStart(status.lastAppliedMillis);
+    persistForm((previous) => previous.date === appliedStart.date && previous.time === appliedStart.time
       ? previous
-      : { ...previous, ...completedStart });
-  }, [persistForm, status.completedCycles, status.isRunning, status.lastAppliedMillis, status.totalCycles]);
+      : { ...previous, ...appliedStart });
+  }, [persistForm, status.lastAppliedMillis]);
 
   const parsed = useMemo(() => parseCycleForm(form), [form]);
-  const enabled = status.isAccessibilityEnabled;
   const shizukuReady = status.isShizukuRunning && status.isShizukuPermissionGranted;
   const running = status.isRunning;
   const activeCycle = running ? Math.max(1, Math.min(status.completedCycles + 1, status.totalCycles)) : 0;
 
   const updateField = (field: keyof CycleForm) => (value: string) => persistForm((previous) => ({ ...previous, [field]: value }));
+  const updateNumericField = (field: NumericField, allowNegative = false) => (value: string) => {
+    persistForm((previous) => ({ ...previous, [field]: normalizeNumericInput(value, allowNegative) }));
+  };
   const setCurrentStart = () => persistForm((previous) => ({ ...previous, ...toFormStart(Date.now()) }));
 
   const adjustActiveField = (delta: number) => {
@@ -140,25 +149,12 @@ export default function HomeScreen() {
         const dateMatch = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(previous.date.trim());
         const timeMatch = /^(\d{2}):(\d{2})$/.exec(previous.time.trim());
         if (!dateMatch || !timeMatch) return previous;
-        const candidate = new Date(
-          Number(dateMatch[3]),
-          Number(dateMatch[2]) - 1,
-          Number(dateMatch[1]),
-          Number(timeMatch[1]),
-          Number(timeMatch[2]),
-          0,
-          0,
-        );
-        if (
-          candidate.getFullYear() !== Number(dateMatch[3]) ||
-          candidate.getMonth() !== Number(dateMatch[2]) - 1 ||
-          candidate.getDate() !== Number(dateMatch[1])
-        ) return previous;
+        const candidate = new Date(Number(dateMatch[3]), Number(dateMatch[2]) - 1, Number(dateMatch[1]), Number(timeMatch[1]), Number(timeMatch[2]), 0, 0);
+        if (candidate.getFullYear() !== Number(dateMatch[3]) || candidate.getMonth() !== Number(dateMatch[2]) - 1 || candidate.getDate() !== Number(dateMatch[1])) return previous;
         if (activeField === "date") candidate.setDate(candidate.getDate() + delta);
         else candidate.setMinutes(candidate.getMinutes() + delta);
         return { ...previous, ...toFormStart(candidate.getTime()) };
       }
-
       const currentValue = previous[activeField].trim();
       const numeric = /^-?\d+$/.test(currentValue) ? Number(currentValue) : 0;
       let next = numeric + delta;
@@ -169,17 +165,11 @@ export default function HomeScreen() {
     if (Platform.OS !== "web") void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
-  const handleOpenServiceSettings = async () => {
-    try { await openAccessibilitySettings(); } catch (error) {
-      Alert.alert("Недоступно", error instanceof Error ? error.message : "Не удалось открыть системные настройки.");
-    }
-  };
-
   const handleRequestShizuku = async () => {
     try {
       const granted = await requestShizukuPermission();
       await refreshStatus();
-      if (!granted) Alert.alert("Подтвердите Shizuku", "В приложении Shizuku должна быть запущена служба. Затем подтвердите доступ для «Циклического времени».");
+      if (!granted) Alert.alert("Подтвердите Shizuku", "В Shizuku должна быть запущена служба. Затем подтвердите доступ для «Циклического времени».");
     } catch (error) {
       Alert.alert("Shizuku недоступен", error instanceof Error ? error.message : "Установите и запустите Shizuku через беспроводную отладку.");
     }
@@ -202,20 +192,19 @@ export default function HomeScreen() {
   const handleStart = async () => {
     if (!parsed.config) { Alert.alert("Проверьте параметры", parsed.error ?? "Заполните поля."); return; }
     if (!shizukuReady) { Alert.alert("Нужен Shizuku", "Запустите Shizuku и нажмите строку «Shizuku» в приложении, чтобы выдать доступ."); return; }
-    if (!enabled) { Alert.alert("Сначала включите службу", "Нажмите «Служба» и включите приложение в специальных возможностях."); return; }
     setIsBusy(true);
     try {
-      setStatus(await startAccessibilityCycle(parsed.config));
+      setStatus(await startTimeCycle(parsed.config));
       if (Platform.OS !== "web") await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
-      Alert.alert("Запуск не выполнен", error instanceof Error ? error.message : "Служба не смогла начать автоматизацию.");
+      Alert.alert("Запуск не выполнен", error instanceof Error ? error.message : "Не удалось запустить цикл Shizuku.");
     } finally { setIsBusy(false); }
   };
 
   const handleEmergencyStop = async () => {
     setIsBusy(true);
     try {
-      setStatus(await stopAccessibilityCycle());
+      setStatus(await stopTimeCycle());
       if (Platform.OS !== "web") await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     } catch (error) {
       Alert.alert("Не удалось остановить", error instanceof Error ? error.message : "Повторите попытку.");
@@ -223,7 +212,7 @@ export default function HomeScreen() {
   };
 
   const handleClearLog = async () => {
-    try { await clearAccessibilityEvents(); await refreshStatus(); } catch (error) {
+    try { await clearTimeEvents(); await refreshStatus(); } catch (error) {
       Alert.alert("Не удалось очистить журнал", error instanceof Error ? error.message : "Повторите попытку.");
     }
   };
@@ -248,21 +237,13 @@ export default function HomeScreen() {
             <Text style={[styles.title, { color: colors.text }]}>Циклическое время</Text>
           </View>
 
-          {!isNativeAccessibilityAvailable && (
+          {!isNativeTimeControlAvailable && (
             <View style={[styles.previewNotice, { backgroundColor: colors.surface, borderColor: colors.warning }]}>
-              <Text style={[styles.previewText, { color: colors.warning }]}>Автоматизация доступна в Android APK.</Text>
+              <Text style={[styles.previewText, { color: colors.warning }]}>Изменение времени доступно в Android APK.</Text>
             </View>
           )}
 
-          <View style={[styles.serviceCard, { backgroundColor: colors.surface, borderColor: enabled ? colors.success : colors.warning }]}>
-            <View style={styles.serviceLine}>
-              <Pressable onPress={handleOpenServiceSettings} style={({ pressed }) => [styles.serviceButton, { borderColor: colors.primary }, pressed && styles.pressed]}>
-                <Text style={[styles.serviceButtonText, { color: colors.primary }]}>Служба</Text>
-              </Pressable>
-              <View style={[styles.statusDot, { backgroundColor: enabled ? colors.success : colors.warning }]} />
-              <Text style={[styles.statusTitle, { color: colors.text }]}>{enabled ? "Включена" : "Не включена"}</Text>
-              {running && <Text style={[styles.runningBadge, { color: colors.success }]}>Цикл {activeCycle}/{status.totalCycles}</Text>}
-            </View>
+          <View style={[styles.shizukuCard, { backgroundColor: colors.surface, borderColor: shizukuReady ? colors.success : colors.warning }]}>
             <Pressable onPress={handleRequestShizuku} style={({ pressed }) => [styles.syncButton, { borderColor: shizukuReady ? colors.success : colors.border }, pressed && styles.pressed]}>
               <Text style={[styles.syncButtonText, { color: shizukuReady ? colors.success : colors.muted }]}>
                 {shizukuReady ? "Shizuku: доступ выдан" : status.isShizukuRunning ? "Shizuku: разрешить доступ" : "Shizuku: запустите службу"}
@@ -274,13 +255,7 @@ export default function HomeScreen() {
                 <Text style={[styles.automaticTimeTitle, { color: colors.text }]}>Синхронизация времени</Text>
                 <Text style={[styles.automaticTimeHint, { color: colors.muted }]}>Получать дату и время из сети</Text>
               </View>
-              <Switch
-                value={status.isAutomaticTimeEnabled}
-                onValueChange={handleAutomaticTime}
-                disabled={isBusy || running || !isNativeAccessibilityAvailable}
-                trackColor={{ false: colors.border, true: colors.success }}
-                thumbColor={status.isAutomaticTimeEnabled ? "#FFFFFF" : colors.muted}
-              />
+              <Switch value={status.isAutomaticTimeEnabled} onValueChange={handleAutomaticTime} disabled={isBusy || running || !isNativeTimeControlAvailable} trackColor={{ false: colors.border, true: colors.success }} thumbColor={status.isAutomaticTimeEnabled ? "#FFFFFF" : colors.muted} />
             </View>
           </View>
 
@@ -297,20 +272,29 @@ export default function HomeScreen() {
             </View>
           </View>
 
+          <View style={[styles.adjusterPanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.adjusterLabel, { color: colors.muted }]}>{activeField ? `Изменить: ${fieldTitles[activeField]}` : "Выберите поле для изменения"}</Text>
+            <View style={[styles.adjuster, { backgroundColor: colors.background, borderColor: colors.border }]}>
+              <Pressable disabled={running || !activeField} onPress={() => adjustActiveField(-1)} style={({ pressed }) => [styles.adjusterButton, (pressed || running || !activeField) && styles.pressed]}><Text style={[styles.adjusterGlyph, { color: colors.primary }]}>−</Text></Pressable>
+              <View style={[styles.adjusterDivider, { backgroundColor: colors.border }]} />
+              <Pressable disabled={running || !activeField} onPress={() => adjustActiveField(1)} style={({ pressed }) => [styles.adjusterButton, (pressed || running || !activeField) && styles.pressed]}><Text style={[styles.adjusterGlyph, { color: colors.primary }]}>+</Text></Pressable>
+            </View>
+          </View>
+
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>Шаг изменения</Text>
             <View style={styles.tripleRow}>
-              <Field label="Дней" value={form.stepDays} onChangeText={updateField("stepDays")} onFocus={() => setActiveField("stepDays")} editable={!running} />
-              <Field label="Часов" value={form.stepHours} onChangeText={updateField("stepHours")} onFocus={() => setActiveField("stepHours")} editable={!running} />
-              <Field label="Минут" value={form.stepMinutes} onChangeText={updateField("stepMinutes")} onFocus={() => setActiveField("stepMinutes")} editable={!running} />
+              <Field label="Дней" value={form.stepDays} onChangeText={updateNumericField("stepDays", true)} onFocus={() => setActiveField("stepDays")} keyboardType="numeric" editable={!running} />
+              <Field label="Часов" value={form.stepHours} onChangeText={updateNumericField("stepHours", true)} onFocus={() => setActiveField("stepHours")} keyboardType="numeric" editable={!running} />
+              <Field label="Минут" value={form.stepMinutes} onChangeText={updateNumericField("stepMinutes", true)} onFocus={() => setActiveField("stepMinutes")} keyboardType="numeric" editable={!running} />
             </View>
           </View>
 
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>Повторение</Text>
             <View style={styles.row}>
-              <View style={styles.rowPrimary}><Field label="Пауза, сек." value={form.pauseSeconds} onChangeText={updateField("pauseSeconds")} onFocus={() => setActiveField("pauseSeconds")} keyboardType="number-pad" editable={!running} /></View>
-              <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalCycles} onChangeText={updateField("totalCycles")} onFocus={() => setActiveField("totalCycles")} keyboardType="number-pad" editable={!running} /></View>
+              <View style={styles.rowPrimary}><Field label="Пауза, сек." value={form.pauseSeconds} onChangeText={updateNumericField("pauseSeconds")} onFocus={() => setActiveField("pauseSeconds")} keyboardType="number-pad" editable={!running} /></View>
+              <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalCycles} onChangeText={updateNumericField("totalCycles")} onFocus={() => setActiveField("totalCycles")} keyboardType="number-pad" editable={!running} /></View>
             </View>
           </View>
 
@@ -325,39 +309,17 @@ export default function HomeScreen() {
                   <Pressable onPress={handleCopyLog} disabled={!status.events.length} style={({ pressed }) => [styles.textAction, (!status.events.length || pressed) && styles.pressed]}><Text style={[styles.textActionLabel, { color: colors.primary }]}>Копировать</Text></Pressable>
                   <Pressable onPress={handleClearLog} disabled={!status.events.length} style={({ pressed }) => [styles.textAction, (!status.events.length || pressed) && styles.pressed]}><Text style={[styles.textActionLabel, { color: colors.primary }]}>Очистить</Text></Pressable>
                 </View>
-                <FlatList
-                  data={status.events.slice().reverse()}
-                  scrollEnabled={false}
-                  keyExtractor={(item, index) => `${item.at}-${index}`}
-                  ListEmptyComponent={<Text style={[styles.emptyLogText, { color: colors.muted }]}>Пока нет событий.</Text>}
-                  renderItem={({ item }) => <View style={[styles.logItem, { backgroundColor: colors.background }]}><Text style={[styles.logTime, { color: colors.muted }]}>{formatDateTime(item.at)}</Text><Text style={[styles.logMessage, { color: colors.text }]}>{item.message}</Text></View>}
-                />
+                <FlatList data={status.events.slice().reverse()} scrollEnabled={false} keyExtractor={(item, index) => `${item.at}-${index}`} ListEmptyComponent={<Text style={[styles.emptyLogText, { color: colors.muted }]}>Пока нет событий.</Text>} renderItem={({ item }) => <View style={[styles.logItem, { backgroundColor: colors.background }]}><Text style={[styles.logTime, { color: colors.muted }]}>{formatDateTime(item.at)}</Text><Text style={[styles.logMessage, { color: colors.text }]}>{item.message}</Text></View>} />
               </View>
             )}
           </View>
         </ScrollView>
 
         <View style={[styles.footer, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
-          <View style={styles.adjusterWrap}>
-            <Text style={[styles.adjusterLabel, { color: colors.muted }]}>{activeField ? `Изменить: ${fieldTitles[activeField]}` : "Выберите поле для изменения"}</Text>
-            <View style={[styles.adjuster, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <Pressable disabled={running || !activeField} onPress={() => adjustActiveField(-1)} style={({ pressed }) => [styles.adjusterButton, (pressed || running || !activeField) && styles.pressed]}>
-                <Text style={[styles.adjusterGlyph, { color: colors.primary }]}>−</Text>
-              </Pressable>
-              <View style={[styles.adjusterDivider, { backgroundColor: colors.border }]} />
-              <Pressable disabled={running || !activeField} onPress={() => adjustActiveField(1)} style={({ pressed }) => [styles.adjusterButton, (pressed || running || !activeField) && styles.pressed]}>
-                <Text style={[styles.adjusterGlyph, { color: colors.primary }]}>+</Text>
-              </Pressable>
-            </View>
-          </View>
           {running ? (
-            <Pressable disabled={isBusy} onPress={handleEmergencyStop} style={({ pressed }) => [styles.stopButton, { backgroundColor: colors.error }, (pressed || isBusy) && styles.pressed]}>
-              <Text style={styles.primaryButtonText}>Цикл {activeCycle} из {status.totalCycles} · остановить</Text>
-            </Pressable>
+            <Pressable disabled={isBusy} onPress={handleEmergencyStop} style={({ pressed }) => [styles.stopButton, { backgroundColor: colors.error }, (pressed || isBusy) && styles.pressed]}><Text style={styles.primaryButtonText}>Цикл {activeCycle} из {status.totalCycles} · остановить</Text></Pressable>
           ) : (
-            <Pressable disabled={isBusy || !isNativeAccessibilityAvailable} onPress={handleStart} style={({ pressed }) => [styles.primaryButton, { backgroundColor: colors.primary }, (pressed || isBusy || !isNativeAccessibilityAvailable) && styles.pressed]}>
-              <Text style={styles.primaryButtonText}>Запустить цикл</Text>
-            </Pressable>
+            <Pressable disabled={isBusy || !isNativeTimeControlAvailable} onPress={handleStart} style={({ pressed }) => [styles.primaryButton, { backgroundColor: colors.primary }, (pressed || isBusy || !isNativeTimeControlAvailable) && styles.pressed]}><Text style={styles.primaryButtonText}>Запустить цикл</Text></Pressable>
           )}
         </View>
       </View>
@@ -369,11 +331,11 @@ const styles = StyleSheet.create({
   screen: { flex: 1 }, content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12, gap: 9 },
   header: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 1 }, headerGlyph: { fontSize: 30, lineHeight: 34, fontWeight: "500" }, title: { fontSize: 22, fontWeight: "800", lineHeight: 27 },
   previewNotice: { borderRadius: 10, paddingVertical: 8, paddingHorizontal: 11, borderWidth: 1 }, previewText: { fontSize: 12, fontWeight: "600" },
-  serviceCard: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 8 }, serviceLine: { flexDirection: "row", alignItems: "center", gap: 7 }, serviceButton: { minHeight: 31, paddingHorizontal: 9, alignItems: "center", justifyContent: "center", borderWidth: 1, borderRadius: 9 }, serviceButtonText: { fontSize: 12, fontWeight: "800" }, statusDot: { width: 9, height: 9, borderRadius: 5 }, statusTitle: { fontSize: 14, fontWeight: "800" }, runningBadge: { marginLeft: "auto", fontSize: 12, fontWeight: "800" },
-  syncButton: { minHeight: 30, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderRadius: 9, paddingHorizontal: 9 }, syncButtonText: { fontSize: 12, fontWeight: "700" }, syncChevron: { fontSize: 21, lineHeight: 21, fontWeight: "700" },
+  shizukuCard: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 8 }, syncButton: { minHeight: 34, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderRadius: 9, paddingHorizontal: 9 }, syncButtonText: { fontSize: 13, fontWeight: "800" }, syncChevron: { fontSize: 21, lineHeight: 21, fontWeight: "700" },
   automaticTimeRow: { borderTopWidth: 1, paddingTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, automaticTimeText: { flex: 1, paddingRight: 8 }, automaticTimeTitle: { fontSize: 13, fontWeight: "800" }, automaticTimeHint: { fontSize: 11, marginTop: 2 },
   card: { borderRadius: 14, padding: 12, borderWidth: 1 }, cardHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, cardTitle: { fontSize: 15, lineHeight: 20, fontWeight: "800" }, nowButton: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 }, nowButtonText: { fontSize: 12, fontWeight: "800" },
-  row: { flexDirection: "row", gap: 8, marginTop: 9 }, rowPrimary: { flex: 1.35 }, rowSecondary: { flex: 1 }, tripleRow: { flexDirection: "row", gap: 7, marginTop: 9 }, fieldWrap: { flex: 1 }, fieldLabel: { fontSize: 11, fontWeight: "700", marginBottom: 4 }, input: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, height: 38, fontSize: 14, fontWeight: "700" },
+  row: { flexDirection: "row", gap: 8, marginTop: 9 }, rowPrimary: { flex: 1.35 }, rowSecondary: { flex: 1 }, tripleRow: { flexDirection: "row", gap: 7, marginTop: 9 }, fieldWrap: { flex: 1 }, fieldLabel: { fontSize: 11, fontWeight: "700", marginBottom: 4 }, input: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, height: 40, fontSize: 15, fontWeight: "700" },
+  adjusterPanel: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 6 }, adjusterLabel: { textAlign: "center", fontSize: 12, fontWeight: "800" }, adjuster: { height: 56, flexDirection: "row", borderRadius: 14, borderWidth: 1, overflow: "hidden" }, adjusterButton: { flex: 1, alignItems: "center", justifyContent: "center" }, adjusterDivider: { width: 1 }, adjusterGlyph: { fontSize: 34, lineHeight: 38, fontWeight: "700" },
   logCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" }, logToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12 }, chevron: { fontSize: 20, lineHeight: 20, fontWeight: "800" }, logActions: { flexDirection: "row", gap: 6, paddingHorizontal: 12, paddingBottom: 8 }, textAction: { paddingVertical: 5, paddingHorizontal: 7 }, textActionLabel: { fontSize: 12, fontWeight: "800" }, emptyLogText: { fontSize: 13, paddingHorizontal: 12, paddingBottom: 12 }, logItem: { marginHorizontal: 10, marginBottom: 7, borderRadius: 10, padding: 9 }, logTime: { fontSize: 10, fontWeight: "800", marginBottom: 3 }, logMessage: { fontSize: 12, lineHeight: 16 },
-  footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, gap: 9 }, adjusterWrap: { gap: 5 }, adjusterLabel: { textAlign: "center", fontSize: 11, fontWeight: "800" }, adjuster: { height: 54, flexDirection: "row", borderRadius: 14, borderWidth: 1, overflow: "hidden" }, adjusterButton: { flex: 1, alignItems: "center", justifyContent: "center" }, adjusterDivider: { width: 1 }, adjusterGlyph: { fontSize: 32, lineHeight: 36, fontWeight: "700" }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
+  footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1 }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
 });

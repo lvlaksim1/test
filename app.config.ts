@@ -25,7 +25,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.16",
+  version: "1.0.17",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -46,7 +46,7 @@ const config: ExpoConfig = {
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    versionCode: 116,
+    versionCode: 117,
     permissions: ["POST_NOTIFICATIONS"],
   },
   web: {
@@ -61,7 +61,7 @@ const config: ExpoConfig = {
   },
   plugins: [
     "expo-router",
-    "./plugins/with-time-accessibility",
+    "./plugins/with-time-shizuku",
     "expo-audio",
     "expo-font",
     "expo-video",

@@ -35,6 +35,21 @@ describe("parseCycleForm", () => {
     });
   });
 
+  it("считает пустые поля шага нулём и принимает отрицательное значение", () => {
+    const result = parseCycleForm({
+      date: "21.08.2026",
+      time: "09:30",
+      stepDays: "",
+      stepHours: "-2",
+      stepMinutes: "",
+      pauseSeconds: "1",
+      totalCycles: "1",
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.config).toMatchObject({ stepDays: 0, stepHours: -2, stepMinutes: 0 });
+  });
+
   it("отклоняет нулевой шаг", () => {
     const result = parseCycleForm({
       date: "21.08.2026",

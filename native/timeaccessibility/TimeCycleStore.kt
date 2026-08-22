@@ -10,7 +10,7 @@ import java.util.Date
 import java.util.Locale
 
 object TimeCycleStore {
-    private const val PREFS = "time_cycle_accessibility"
+    private const val PREFS = "time_cycle_shizuku"
     private const val KEY_START = "start_at"
     private const val KEY_DAYS = "step_days"
     private const val KEY_HOURS = "step_hours"
@@ -22,12 +22,19 @@ object TimeCycleStore {
     private const val KEY_LAST_APPLIED = "last_applied_at"
     private const val KEY_AUTOMATIC_TIME = "automatic_time_enabled"
     private const val KEY_EVENTS = "events"
-    private const val KEY_RETURN_TO_APP = "return_to_app_after_enable"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun saveAndStart(context: Context, startAtMillis: Long, stepDays: Int, stepHours: Int, stepMinutes: Int, pauseSeconds: Int, totalCycles: Int) {
+    fun saveAndStart(
+        context: Context,
+        startAtMillis: Long,
+        stepDays: Int,
+        stepHours: Int,
+        stepMinutes: Int,
+        pauseSeconds: Int,
+        totalCycles: Int,
+    ) {
         prefs(context).edit()
             .putLong(KEY_START, startAtMillis)
             .putInt(KEY_DAYS, stepDays)
@@ -37,6 +44,7 @@ object TimeCycleStore {
             .putInt(KEY_TOTAL, totalCycles)
             .putInt(KEY_COMPLETED, 0)
             .putBoolean(KEY_RUNNING, true)
+            .remove(KEY_LAST_APPLIED)
             .apply()
         addEvent(context, "Цикл запущен: задано попыток — $totalCycles.")
     }
@@ -49,21 +57,10 @@ object TimeCycleStore {
     fun isRunning(context: Context): Boolean = prefs(context).getBoolean(KEY_RUNNING, false)
     fun completedCycles(context: Context): Int = prefs(context).getInt(KEY_COMPLETED, 0)
     fun totalCycles(context: Context): Int = prefs(context).getInt(KEY_TOTAL, 0)
-    fun pauseMillis(context: Context): Long = prefs(context).getInt(KEY_PAUSE, 2).coerceAtLeast(1) * 1000L
+    fun pauseMillis(context: Context): Long = prefs(context).getInt(KEY_PAUSE, 1).coerceAtLeast(1) * 1000L
 
     fun setAutomaticTimeEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTOMATIC_TIME, enabled).apply()
-    }
-
-    fun requestReturnToAppAfterEnable(context: Context) {
-        prefs(context).edit().putBoolean(KEY_RETURN_TO_APP, true).apply()
-    }
-
-    fun consumeReturnToAppAfterEnable(context: Context): Boolean {
-        val storage = prefs(context)
-        val requested = storage.getBoolean(KEY_RETURN_TO_APP, false)
-        if (requested) storage.edit().putBoolean(KEY_RETURN_TO_APP, false).apply()
-        return requested
     }
 
     fun targetForCurrentCycle(context: Context): Long {
@@ -76,7 +73,7 @@ object TimeCycleStore {
         return calendar.timeInMillis
     }
 
-    fun markAttemptFinished(context: Context, targetMillis: Long, success: Boolean, detail: String) {
+    fun markAttemptSucceeded(context: Context, targetMillis: Long, detail: String): Boolean {
         val storage = prefs(context)
         val completed = storage.getInt(KEY_COMPLETED, 0) + 1
         val total = storage.getInt(KEY_TOTAL, 0)
@@ -84,23 +81,33 @@ object TimeCycleStore {
         storage.edit()
             .putInt(KEY_COMPLETED, completed)
             .putBoolean(KEY_RUNNING, running)
-            .apply {
-                if (success) putLong(KEY_LAST_APPLIED, targetMillis)
-            }
+            .putLong(KEY_LAST_APPLIED, targetMillis)
             .apply()
-
         val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
-        addEvent(context, "${if (success) "Применено" else "Не подтверждено"} значение $formatted. $detail")
+        addEvent(context, "Применено значение $formatted. $detail")
         if (!running) addEvent(context, "Все $total циклов завершены.")
+        return running
+    }
+
+    fun markAttemptFailed(context: Context, targetMillis: Long, detail: String) {
+        prefs(context).edit().putBoolean(KEY_RUNNING, false).apply()
+        val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
+        addEvent(context, "Не подтверждено значение $formatted. $detail")
+        addEvent(context, "Цикл остановлен из-за ошибки Shizuku.")
+    }
+
+    fun finishIfComplete(context: Context) {
+        prefs(context).edit().putBoolean(KEY_RUNNING, false).apply()
     }
 
     fun status(context: Context): JSONObject {
         val storage = prefs(context)
+        val running = storage.getBoolean(KEY_RUNNING, false)
         return JSONObject().apply {
-            put("isRunning", storage.getBoolean(KEY_RUNNING, false))
+            put("isRunning", running)
             put("completedCycles", storage.getInt(KEY_COMPLETED, 0))
             put("totalCycles", storage.getInt(KEY_TOTAL, 0))
-            put("nextTargetMillis", if (storage.contains(KEY_START)) targetForCurrentCycle(context) else JSONObject.NULL)
+            put("nextTargetMillis", if (running && storage.contains(KEY_START)) targetForCurrentCycle(context) else JSONObject.NULL)
             put("lastAppliedMillis", if (storage.contains(KEY_LAST_APPLIED)) storage.getLong(KEY_LAST_APPLIED, 0L) else JSONObject.NULL)
             put("isAutomaticTimeEnabled", storage.getBoolean(KEY_AUTOMATIC_TIME, true))
             put("events", events(context))
