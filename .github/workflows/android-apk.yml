@@ -73,3 +73,24 @@ jobs:
 
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install --clean
+
+
+      - name: Install Android SDK platform
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Build release APK
+        run: cd android && ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyclic-time-apk-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
