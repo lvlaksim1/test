@@ -1,6 +1,8 @@
 name: Android APK
 
 
+
+
 on:
   workflow_dispatch:
   push:
@@ -15,12 +17,16 @@ on:
       - "app/**"
       - "components/**"
       - "lib/**"
-      - "source-overlay-1.0.15.zip"
+      - "source-overlay-1.0.16.zip"
       - ".github/workflows/android-apk.yml"
+
+
 
 
 permissions:
   contents: read
+
+
 
 
 jobs:
@@ -30,19 +36,27 @@ jobs:
     timeout-minutes: 35
 
 
+
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
 
+
+
       - name: Apply checked source overlay
-        run: unzip -oq source-overlay-1.0.15.zip -d .
+        run: unzip -oq source-overlay-1.0.16.zip -d .
+
+
 
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9.12.0
+
+
 
 
       - name: Set up Node.js
@@ -52,6 +66,8 @@ jobs:
           cache: pnpm
 
 
+
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -59,38 +75,7 @@ jobs:
           java-version: "17"
 
 
+
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-
-      - name: Install Android SDK platform
-        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
-
-
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-
-
-      - name: Generate Android project
-        run: npx expo prebuild --platform android --no-install --clean
-
-
-      - name: Install Android SDK platform
-        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
-
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Generate Android project
-        run: npx expo prebuild --platform android --no-install --clean
-
-      - name: Build release APK
-        run: cd android && ./gradlew :app:assembleRelease --no-daemon
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: cyclic-time-apk-${{ github.run_number }}
-          path: android/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-          retention-days: 14
