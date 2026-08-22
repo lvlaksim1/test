@@ -7,7 +7,6 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
@@ -34,39 +33,40 @@ class TimeAccessibilityModule(private val context: ReactApplicationContext) : Re
             promise.reject("SHIZUKU_NOT_RUNNING", "Сначала установите и запустите Shizuku через беспроводную отладку.")
             return
         }
-        if (current.isPermissionGranted || TimeShizukuController.requestPermission()) {
-            promise.resolve(true)
-        } else {
-            promise.resolve(false)
-        }
+        if (current.isPermissionGranted || TimeShizukuController.requestPermission()) promise.resolve(true) else promise.resolve(false)
     }
 
     @ReactMethod
     fun openAccessibilitySettings(promise: Promise) {
         runCatching {
             TimeCycleStore.requestReturnToAppAfterEnable(context)
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-        }.onSuccess {
-            promise.resolve(true)
-        }.onFailure {
-            promise.reject("OPEN_SETTINGS_FAILED", "Не удалось открыть настройки специальных возможностей.", it)
-        }
+            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
+        }.onSuccess { promise.resolve(true) }
+            .onFailure { promise.reject("OPEN_SETTINGS_FAILED", "Не удалось открыть настройки специальных возможностей.", it) }
     }
 
     @ReactMethod
     fun openTimeSynchronizationSettings(promise: Promise) {
         runCatching {
-            val intent = Intent(Settings.ACTION_DATE_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
+        }.onSuccess { promise.resolve(true) }
+            .onFailure { promise.reject("OPEN_TIME_SETTINGS_FAILED", "Не удалось открыть настройки синхронизации времени.", it) }
+    }
+
+    @ReactMethod
+    fun setAutomaticTime(enabled: Boolean, promise: Promise) {
+        if (TimeCycleStore.isRunning(context)) {
+            promise.reject("CYCLE_RUNNING", "Нельзя переключать синхронизацию во время выполнения цикла.")
+            return
+        }
+        TimeShizukuController.setAutomaticTime(context, enabled) { outcome ->
+            if (outcome.isSuccess) {
+                TimeCycleStore.setAutomaticTimeEnabled(context, enabled)
+                TimeCycleStore.addEvent(context, outcome.detail)
+                promise.resolve(jsonToWritableMap(TimeCycleStore.status(context)))
+            } else {
+                promise.reject("AUTOMATIC_TIME_FAILED", outcome.detail)
             }
-            context.startActivity(intent)
-        }.onSuccess {
-            promise.resolve(true)
-        }.onFailure {
-            promise.reject("OPEN_TIME_SETTINGS_FAILED", "Не удалось открыть настройки синхронизации времени.", it)
         }
     }
 
@@ -91,15 +91,12 @@ class TimeAccessibilityModule(private val context: ReactApplicationContext) : Re
             val total = settings.getInt("totalCycles")
             require(pause in 1..86400) { "Пауза должна быть от 1 секунды до 24 часов." }
             require(total in 1..1000) { "Количество циклов должно быть от 1 до 1000." }
-            require(days in 0..999 && hours in 0..999 && minutes in 0..999) { "Шаг задан вне допустимого диапазона." }
+            require(days in -999..999 && hours in -999..999 && minutes in -999..999) { "Шаг задан вне допустимого диапазона." }
 
             TimeCycleStore.saveAndStart(context, startAt, days, hours, minutes, pause, total)
             TimeAccessibilityService.requestStart(context)
-        }.onSuccess {
-            promise.resolve(jsonToWritableMap(TimeCycleStore.status(context)))
-        }.onFailure {
-            promise.reject("START_FAILED", it.message ?: "Не удалось запустить цикл.", it)
-        }
+        }.onSuccess { promise.resolve(jsonToWritableMap(TimeCycleStore.status(context))) }
+            .onFailure { promise.reject("START_FAILED", it.message ?: "Не удалось запустить цикл.", it) }
     }
 
     @ReactMethod

@@ -19,21 +19,15 @@ object TimeCycleStore {
     private const val KEY_TOTAL = "total_cycles"
     private const val KEY_COMPLETED = "completed_cycles"
     private const val KEY_RUNNING = "is_running"
+    private const val KEY_LAST_APPLIED = "last_applied_at"
+    private const val KEY_AUTOMATIC_TIME = "automatic_time_enabled"
     private const val KEY_EVENTS = "events"
     private const val KEY_RETURN_TO_APP = "return_to_app_after_enable"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun saveAndStart(
-        context: Context,
-        startAtMillis: Long,
-        stepDays: Int,
-        stepHours: Int,
-        stepMinutes: Int,
-        pauseSeconds: Int,
-        totalCycles: Int,
-    ) {
+    fun saveAndStart(context: Context, startAtMillis: Long, stepDays: Int, stepHours: Int, stepMinutes: Int, pauseSeconds: Int, totalCycles: Int) {
         prefs(context).edit()
             .putLong(KEY_START, startAtMillis)
             .putInt(KEY_DAYS, stepDays)
@@ -53,12 +47,13 @@ object TimeCycleStore {
     }
 
     fun isRunning(context: Context): Boolean = prefs(context).getBoolean(KEY_RUNNING, false)
-
     fun completedCycles(context: Context): Int = prefs(context).getInt(KEY_COMPLETED, 0)
-
     fun totalCycles(context: Context): Int = prefs(context).getInt(KEY_TOTAL, 0)
-
     fun pauseMillis(context: Context): Long = prefs(context).getInt(KEY_PAUSE, 2).coerceAtLeast(1) * 1000L
+
+    fun setAutomaticTimeEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTOMATIC_TIME, enabled).apply()
+    }
 
     fun requestReturnToAppAfterEnable(context: Context) {
         prefs(context).edit().putBoolean(KEY_RETURN_TO_APP, true).apply()
@@ -73,9 +68,7 @@ object TimeCycleStore {
 
     fun targetForCurrentCycle(context: Context): Long {
         val storage = prefs(context)
-        val calendar = Calendar.getInstance().apply {
-            timeInMillis = storage.getLong(KEY_START, System.currentTimeMillis())
-        }
+        val calendar = Calendar.getInstance().apply { timeInMillis = storage.getLong(KEY_START, System.currentTimeMillis()) }
         val index = storage.getInt(KEY_COMPLETED, 0)
         calendar.add(Calendar.DAY_OF_YEAR, storage.getInt(KEY_DAYS, 0) * index)
         calendar.add(Calendar.HOUR_OF_DAY, storage.getInt(KEY_HOURS, 0) * index)
@@ -91,14 +84,14 @@ object TimeCycleStore {
         storage.edit()
             .putInt(KEY_COMPLETED, completed)
             .putBoolean(KEY_RUNNING, running)
+            .apply {
+                if (success) putLong(KEY_LAST_APPLIED, targetMillis)
+            }
             .apply()
 
         val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
-        val prefix = if (success) "Применено" else "Не подтверждено"
-        addEvent(context, "$prefix значение $formatted. $detail")
-        if (!running) {
-            addEvent(context, "Все $total циклов завершены.")
-        }
+        addEvent(context, "${if (success) "Применено" else "Не подтверждено"} значение $formatted. $detail")
+        if (!running) addEvent(context, "Все $total циклов завершены.")
     }
 
     fun status(context: Context): JSONObject {
@@ -108,6 +101,8 @@ object TimeCycleStore {
             put("completedCycles", storage.getInt(KEY_COMPLETED, 0))
             put("totalCycles", storage.getInt(KEY_TOTAL, 0))
             put("nextTargetMillis", if (storage.contains(KEY_START)) targetForCurrentCycle(context) else JSONObject.NULL)
+            put("lastAppliedMillis", if (storage.contains(KEY_LAST_APPLIED)) storage.getLong(KEY_LAST_APPLIED, 0L) else JSONObject.NULL)
+            put("isAutomaticTimeEnabled", storage.getBoolean(KEY_AUTOMATIC_TIME, true))
             put("events", events(context))
         }
     }
@@ -117,21 +112,16 @@ object TimeCycleStore {
         return runCatching { JSONArray(stored) }.getOrDefault(JSONArray())
     }
 
-    fun clearEvents(context: Context) {
-        prefs(context).edit().putString(KEY_EVENTS, "[]").apply()
-    }
+    fun clearEvents(context: Context) { prefs(context).edit().putString(KEY_EVENTS, "[]").apply() }
 
     fun addEvent(context: Context, message: String) {
         val storage = prefs(context)
         val items = events(context)
-        val entry = JSONObject().apply {
+        items.put(JSONObject().apply {
             put("at", System.currentTimeMillis())
             put("message", message)
-        }
-        items.put(entry)
-        while (items.length() > 30) {
-            items.remove(0)
-        }
+        })
+        while (items.length() > 30) items.remove(0)
         storage.edit().putString(KEY_EVENTS, items.toString()).apply()
     }
 }

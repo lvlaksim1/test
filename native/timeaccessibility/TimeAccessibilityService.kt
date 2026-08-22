@@ -138,6 +138,7 @@ class TimeAccessibilityService : AccessibilityService() {
             shizukuCommandInFlight = false
             if (!TimeCycleStore.isRunning(this)) return@applyTime
             if (outcome.isSuccess) {
+                TimeCycleStore.setAutomaticTimeEnabled(this, false)
                 finishAttempt(true, "Shizuku: ${outcome.detail}")
             } else {
                 stopWithFailure("Shizuku не применил системное время. ${outcome.detail}")

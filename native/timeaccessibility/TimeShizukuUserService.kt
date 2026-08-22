@@ -30,6 +30,18 @@ class TimeShizukuUserService : ITimeShizukuService.Stub() {
         }
     }
 
+    override fun setAutomaticTime(enabled: Boolean): String {
+        val expected = if (enabled) "1" else "0"
+        val change = runCommand("settings put global auto_time $expected")
+        val actual = runCommand("settings get global auto_time")
+        val verified = change.exitCode == 0 && actual.stdout.trim() == expected
+        return if (verified) {
+            "OK: автоматическая синхронизация времени ${if (enabled) "включена" else "выключена"}."
+        } else {
+            "ОШИБКА: auto=${compact(actual.stdout)}; change=${compact(change.describe())}"
+        }
+    }
+
     override fun destroy() {
         // Недаэмонская служба Shizuku завершается вместе с клиентом.
     }
