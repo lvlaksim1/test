@@ -1,5 +1,6 @@
 name: Android APK
 
+
 on:
   workflow_dispatch:
   push:
@@ -17,8 +18,10 @@ on:
       - "source-overlay-1.0.15.zip"
       - ".github/workflows/android-apk.yml"
 
+
 permissions:
   contents: read
+
 
 jobs:
   build-apk:
@@ -26,17 +29,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
+
       - name: Apply checked source overlay
-        run: unzip -q source-overlay-1.0.15.zip -d .
+        run: unzip -oq source-overlay-1.0.15.zip -d .
+
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9.12.0
+
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -44,31 +51,25 @@ jobs:
           node-version: 22
           cache: pnpm
 
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
 
       - name: Install Android SDK platform
         run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
 
+
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install --clean
-
-      - name: Build release APK
-        run: cd android && ./gradlew :app:assembleRelease --no-daemon
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: cyclic-time-apk-${{ github.run_number }}
-          path: android/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-          retention-days: 14
