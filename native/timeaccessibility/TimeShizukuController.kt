@@ -46,9 +46,9 @@ object TimeShizukuController {
     
     private const val REQUEST_CODE = 7201
     
-    private const val SERVICE_TAG = "time-cycler-direct-time-v1"
+    private const val SERVICE_TAG = "time-cycler-direct-time-v2"
     
-    private const val SERVICE_VERSION = 2
+    private const val SERVICE_VERSION = 3
     
     private const val SERVICE_PROCESS_SUFFIX = "timecycler"
     
@@ -64,7 +64,7 @@ object TimeShizukuController {
     
     private var isBinding = false
     
-    private var pendingRequest: Pair<Long, (ShizukuCommandOutcome) -> Unit>? = null
+    private var pendingRequest: Pair<(ITimeShizukuService) -> String, (ShizukuCommandOutcome) -> Unit>? = null
     
 
     
@@ -108,6 +108,30 @@ object TimeShizukuController {
     
     fun applyTime(context: Context, targetMillis: Long, callback: (ShizukuCommandOutcome) -> Unit) {
         
+        execute(context, { service -> service.applyTime(targetMillis) }, callback)
+        
+    }
+    
+
+    
+    fun setAutomaticTime(context: Context, enabled: Boolean, callback: (ShizukuCommandOutcome) -> Unit) {
+        
+        execute(context, { service -> service.setAutomaticTime(enabled) }, callback)
+        
+    }
+    
+
+    
+    private fun execute(
+        
+        context: Context,
+        
+        command: (ITimeShizukuService) -> String,
+        
+        callback: (ShizukuCommandOutcome) -> Unit,
+        
+    ) {
+        
         if (!state().isPermissionGranted) {
             
             deliver(callback, ShizukuCommandOutcome(false, "Shizuku не запущен или доступ к нему не выдан."))
@@ -130,7 +154,7 @@ object TimeShizukuController {
                     
                 } else {
                     
-                    pendingRequest = targetMillis to callback
+                    pendingRequest = command to callback
                     
                     if (!isBinding) {
                         
@@ -156,7 +180,7 @@ object TimeShizukuController {
             
         }
         
-        if (existing != null) invoke(existing, targetMillis, callback)
+        if (existing != null) invoke(existing, command, callback)
         
     }
     
@@ -242,11 +266,19 @@ object TimeShizukuController {
     
 
     
-    private fun invoke(service: ITimeShizukuService, targetMillis: Long, callback: (ShizukuCommandOutcome) -> Unit) {
+    private fun invoke(
+        
+        service: ITimeShizukuService,
+        
+        command: (ITimeShizukuService) -> String,
+        
+        callback: (ShizukuCommandOutcome) -> Unit,
+        
+    ) {
         
         executor.execute {
             
-            val detail = runCatching { service.applyTime(targetMillis) }
+            val detail = runCatching { command(service) }
             
                 .getOrElse { "ОШИБКА: ${it.message.orEmpty()}" }
                 
@@ -265,6 +297,22 @@ object TimeShizukuController {
     }
     
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
