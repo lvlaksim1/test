@@ -159,7 +159,7 @@ export default function HomeScreen() {
       const numeric = /^-?\d+$/.test(currentValue) ? Number(currentValue) : 0;
       let next = numeric + delta;
       if (activeField === "pauseSeconds") next = Math.max(0, next);
-      if (activeField === "totalCycles") next = Math.max(1, Math.min(1000, next || 1));
+      if (activeField === "totalCycles") next = Math.max(1, Math.min(99999, next || 1));
       return { ...previous, [activeField]: String(next) };
     });
     if (Platform.OS !== "web") void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
