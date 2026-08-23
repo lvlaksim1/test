@@ -1,69 +1,52 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
-# dependencies
-node_modules/
-
-# Expo
-.expo/
+```
+# Compiled and build artifacts
+*.pyc
+__pycache__/
+*.o
+*.obj
 dist/
-web-build/
-expo-env.d.ts
+build/
+target/
 
-# Native
-.kotlin/
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
+# Dependencies
+node_modules/
+.venv/
+venv/
+.env
+.env.local
+.env.*
 
-# Metro
-.metro-health-check*
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
-
-# macOS
-.DS_Store
-*.pem
-
-# local env files
-.env*.local
-
-# typescript
-*.tsbuildinfo
-
-app-example
-
-# generated native folders
-/ios
-/android
-
-# IDE
+# Editors
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
 
-# Logs
-logs
-*.log
+# Coverage
+coverage/
+htmlcov/
+.coverage
 
-# OS
+# Python specific
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytest
+.pytest_cache/
+
+# OS generated files
+.DS_Store
 Thumbs.db
-
-# Build files
-*.tgz
-*.tar.gz
-.cache/
-
-# Webdev artifacts (checkpoint zips, migrations, etc.)
-.webdev/
-.project-config.json
-
-# Temporary copies of APK artifacts downloaded from CI
-/github-apk/
+```

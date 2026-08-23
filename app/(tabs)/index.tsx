@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, AppState, FlatList, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from "react-native";
+import { Alert, AppState, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from "react-native";
 
 import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
@@ -230,7 +230,7 @@ export default function HomeScreen() {
 
   return (
     <ScreenContainer edges={["top", "left", "right", "bottom"]} containerClassName="bg-background">
-      <View style={styles.screen}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.header}>
             <Text style={[styles.headerGlyph, { color: colors.primary }]}>◷</Text>
