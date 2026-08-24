@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from "react-native";
+import { Alert, AppState, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from "react-native";
 
 import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
@@ -20,6 +20,8 @@ import {
 } from "@/lib/time-control";
 
 const FORM_STORAGE_KEY = "time-machine-form-v2";
+const CONFIGURATIONS_STORAGE_KEY = "time-machine-configurations-v1";
+const ACTIVE_CONFIGURATION_STORAGE_KEY = "time-machine-active-configuration-v1";
 
 const initialStatus: TimeControlStatus = {
   isShizukuRunning: false,
@@ -41,6 +43,12 @@ type FieldProps = {
   placeholder?: string;
   keyboardType?: TextInputProps["keyboardType"];
   editable?: boolean;
+};
+
+type SavedConfiguration = {
+  name: string;
+  step: Pick<CycleForm, "stepDays" | "stepHours" | "stepMinutes">;
+  repetition: Pick<CycleForm, "pauseSeconds" | "repeatsPerSeries" | "seriesPauseSeconds" | "totalSeries">;
 };
 
 function Field({ label, value, onChangeText, onFocus, placeholder = "", keyboardType = "default", editable = true }: FieldProps) {
@@ -98,6 +106,23 @@ async function getRealCurrentTimeMillis(): Promise<number> {
   return millis;
 }
 
+function makeConfiguration(name: string, form: CycleForm): SavedConfiguration {
+  return {
+    name,
+    step: {
+      stepDays: form.stepDays,
+      stepHours: form.stepHours,
+      stepMinutes: form.stepMinutes,
+    },
+    repetition: {
+      pauseSeconds: form.pauseSeconds,
+      repeatsPerSeries: form.repeatsPerSeries,
+      seriesPauseSeconds: form.seriesPauseSeconds,
+      totalSeries: form.totalSeries,
+    },
+  };
+}
+
 export default function HomeScreen() {
   const colors = useColors();
   const scrollRef = useRef<ScrollView>(null);
@@ -105,6 +130,11 @@ export default function HomeScreen() {
   const [status, setStatus] = useState<TimeControlStatus>(initialStatus);
   const [isBusy, setIsBusy] = useState(false);
   const [isLogExpanded, setIsLogExpanded] = useState(false);
+  const [isConfigurationsExpanded, setIsConfigurationsExpanded] = useState(false);
+  const [configurations, setConfigurations] = useState<SavedConfiguration[]>([]);
+  const [activeConfigurationName, setActiveConfigurationName] = useState<string | null>(null);
+  const [isSaveDialogVisible, setIsSaveDialogVisible] = useState(false);
+  const [configurationNameDraft, setConfigurationNameDraft] = useState("");
   const [activeField, setActiveField] = useState<AdjustableField | null>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -123,6 +153,17 @@ export default function HomeScreen() {
     AsyncStorage.getItem(FORM_STORAGE_KEY).then((stored) => {
       if (stored) setForm({ ...getDefaultForm(), ...(JSON.parse(stored) as Partial<CycleForm>) });
     }).catch(() => undefined);
+
+    AsyncStorage.getItem(CONFIGURATIONS_STORAGE_KEY).then((stored) => {
+      if (!stored) return;
+      const parsed = JSON.parse(stored) as SavedConfiguration[];
+      if (Array.isArray(parsed)) setConfigurations(parsed);
+    }).catch(() => undefined);
+
+    AsyncStorage.getItem(ACTIVE_CONFIGURATION_STORAGE_KEY).then((stored) => {
+      setActiveConfigurationName(stored?.trim() ? stored : null);
+    }).catch(() => undefined);
+
     void refreshStatus();
   }, [refreshStatus]);
 
@@ -158,6 +199,7 @@ export default function HomeScreen() {
   const updateNumericField = (field: NumericField, allowNegative = false) => (value: string) => {
     persistForm((previous) => ({ ...previous, [field]: normalizeNumericInput(value, allowNegative) }));
   };
+
   const setCurrentStart = async () => {
     if (running || isBusy) return;
     setIsBusy(true);
@@ -171,6 +213,7 @@ export default function HomeScreen() {
       setIsBusy(false);
     }
   };
+
   const focusField = (field: AdjustableField): NonNullable<TextInputProps["onFocus"]> => (event) => {
     setActiveField(field);
     if (Platform.OS !== "android") return;
@@ -267,6 +310,76 @@ export default function HomeScreen() {
     }
   };
 
+  const openSaveConfigurationDialog = () => {
+    setConfigurationNameDraft(activeConfigurationName ?? "");
+    setIsSaveDialogVisible(true);
+  };
+
+  const closeSaveConfigurationDialog = () => {
+    setIsSaveDialogVisible(false);
+    setConfigurationNameDraft("");
+  };
+
+  const saveConfiguration = async (name: string, existingIndex: number) => {
+    const nextConfiguration = makeConfiguration(name, form);
+    const nextConfigurations = existingIndex >= 0
+      ? configurations.map((configuration, index) => index === existingIndex ? nextConfiguration : configuration)
+      : [...configurations, nextConfiguration];
+
+    try {
+      await AsyncStorage.multiSet([
+        [CONFIGURATIONS_STORAGE_KEY, JSON.stringify(nextConfigurations)],
+        [ACTIVE_CONFIGURATION_STORAGE_KEY, name],
+      ]);
+      setConfigurations(nextConfigurations);
+      setActiveConfigurationName(name);
+      closeSaveConfigurationDialog();
+      if (Platform.OS !== "web") await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Конфигурация сохранена", `«${name}» сохранена.`);
+    } catch (error) {
+      Alert.alert("Не удалось сохранить конфигурацию", error instanceof Error ? error.message : "Повторите попытку.");
+    }
+  };
+
+  const confirmSaveConfiguration = () => {
+    const name = configurationNameDraft.trim();
+    if (!name) {
+      Alert.alert("Введите название конфигурации", "Название не может быть пустым.");
+      return;
+    }
+
+    const existingIndex = configurations.findIndex((configuration) => configuration.name === name);
+    if (existingIndex < 0) {
+      void saveConfiguration(name, -1);
+      return;
+    }
+
+    Alert.alert(
+      "Перезаписать конфигурацию?",
+      `Конфигурация «${name}» уже существует. Заменить сохранённые параметры текущими?`,
+      [
+        { text: "Отмена", style: "cancel" },
+        { text: "Перезаписать", onPress: () => void saveConfiguration(name, existingIndex) },
+      ],
+    );
+  };
+
+  const loadConfiguration = async (configuration: SavedConfiguration) => {
+    persistForm((previous) => ({
+      ...previous,
+      ...configuration.step,
+      ...configuration.repetition,
+    }));
+    setActiveConfigurationName(configuration.name);
+
+    try {
+      await AsyncStorage.setItem(ACTIVE_CONFIGURATION_STORAGE_KEY, configuration.name);
+      if (Platform.OS !== "web") await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      Alert.alert("Конфигурация загружена", "Параметры применены, но имя текущей конфигурации не удалось сохранить.");
+    }
+  };
+
   return (
     <ScreenContainer edges={["top", "left", "right", "bottom"]} containerClassName="bg-background">
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -352,6 +465,40 @@ export default function HomeScreen() {
           </View>
 
           <View style={[styles.logCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={styles.configurationHeader}>
+              <Pressable onPress={openSaveConfigurationDialog} style={({ pressed }) => [styles.saveConfigurationButton, { borderColor: colors.primary }, pressed && styles.pressed]}>
+                <Text style={[styles.saveConfigurationButtonText, { color: colors.primary }]}>Сохранить конфигурацию</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setIsConfigurationsExpanded((previous) => !previous)}
+                hitSlop={8}
+                style={({ pressed }) => [styles.configurationToggle, pressed && styles.pressed]}
+              >
+                <Text style={[styles.chevron, { color: colors.primary }]}>{isConfigurationsExpanded ? "⌃" : "⌄"}</Text>
+              </Pressable>
+            </View>
+            {isConfigurationsExpanded && (
+              <View style={styles.configurationList}>
+                {configurations.length === 0 ? (
+                  <Text style={[styles.emptyLogText, styles.configurationEmptyText, { color: colors.muted }]}>Нет сохранённых конфигураций.</Text>
+                ) : (
+                  configurations.map((configuration) => (
+                    <Pressable
+                      key={configuration.name}
+                      disabled={running}
+                      onPress={() => void loadConfiguration(configuration)}
+                      style={({ pressed }) => [styles.configurationItem, { backgroundColor: colors.background }, (pressed || running) && styles.pressed]}
+                    >
+                      <Text style={[styles.configurationItemName, { color: colors.text }]} numberOfLines={1}>{configuration.name}</Text>
+                      {configuration.name === activeConfigurationName && <Text style={[styles.configurationCurrent, { color: colors.primary }]}>текущая</Text>}
+                    </Pressable>
+                  ))
+                )}
+              </View>
+            )}
+          </View>
+
+          <View style={[styles.logCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Pressable onPress={() => setIsLogExpanded((previous) => !previous)} style={({ pressed }) => [styles.logToggle, pressed && styles.pressed]}>
               <Text style={[styles.cardTitle, { color: colors.text }]}>Журнал действий</Text>
               <Text style={[styles.chevron, { color: colors.primary }]}>{isLogExpanded ? "⌃" : "⌄"}</Text>
@@ -376,6 +523,34 @@ export default function HomeScreen() {
           )}
         </View>
       </KeyboardAvoidingView>
+
+      <Modal visible={isSaveDialogVisible} transparent animationType="fade" onRequestClose={closeSaveConfigurationDialog}>
+        <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <View style={[styles.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Сохранить конфигурацию</Text>
+            <Text style={[styles.modalHint, { color: colors.muted }]}>Введите название конфигурации</Text>
+            <TextInput
+              autoFocus
+              selectTextOnFocus
+              value={configurationNameDraft}
+              onChangeText={setConfigurationNameDraft}
+              onSubmitEditing={confirmSaveConfiguration}
+              returnKeyType="done"
+              placeholder="Название"
+              placeholderTextColor={colors.muted}
+              style={[styles.modalInput, { backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
+            />
+            <View style={styles.modalActions}>
+              <Pressable onPress={closeSaveConfigurationDialog} style={({ pressed }) => [styles.modalActionButton, pressed && styles.pressed]}>
+                <Text style={[styles.modalCancelText, { color: colors.muted }]}>Отмена</Text>
+              </Pressable>
+              <Pressable onPress={confirmSaveConfiguration} style={({ pressed }) => [styles.modalActionButton, styles.modalSaveButton, { backgroundColor: colors.primary }, pressed && styles.pressed]}>
+                <Text style={styles.modalSaveText}>Сохранить</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </ScreenContainer>
   );
 }
@@ -391,5 +566,7 @@ const styles = StyleSheet.create({
   repeatGroup: { marginTop: 8 }, repeatGroupTitle: { fontSize: 11, fontWeight: "800" }, repeatDivider: { height: 1, marginTop: 11 },
   adjusterPanel: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 6 }, adjusterLabel: { textAlign: "center", fontSize: 12, fontWeight: "800" }, adjuster: { height: 56, flexDirection: "row", borderRadius: 14, borderWidth: 1, overflow: "hidden" }, adjusterButton: { flex: 1, alignItems: "center", justifyContent: "center" }, adjusterDivider: { width: 1 }, adjusterGlyph: { fontSize: 34, lineHeight: 38, fontWeight: "700" },
   logCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" }, logToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12 }, chevron: { fontSize: 20, lineHeight: 20, fontWeight: "800" }, logActions: { flexDirection: "row", gap: 6, paddingHorizontal: 12, paddingBottom: 8 }, textAction: { paddingVertical: 5, paddingHorizontal: 7 }, textActionLabel: { fontSize: 12, fontWeight: "800" }, emptyLogText: { fontSize: 13, paddingHorizontal: 12, paddingBottom: 12 }, logItem: { marginHorizontal: 10, marginBottom: 7, borderRadius: 10, padding: 9 }, logTime: { fontSize: 10, fontWeight: "800", marginBottom: 3 }, logMessage: { fontSize: 12, lineHeight: 16 },
+  configurationHeader: { minHeight: 58, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 10, paddingVertical: 8 }, saveConfigurationButton: { flexShrink: 1, borderWidth: 1, borderRadius: 9, paddingHorizontal: 11, paddingVertical: 8 }, saveConfigurationButtonText: { fontSize: 13, fontWeight: "800" }, configurationToggle: { width: 44, height: 40, marginLeft: 28, alignItems: "center", justifyContent: "center", borderRadius: 9 }, configurationList: { paddingHorizontal: 10, paddingBottom: 10, gap: 7 }, configurationEmptyText: { paddingHorizontal: 2, paddingBottom: 2 }, configurationItem: { minHeight: 42, borderRadius: 10, paddingHorizontal: 11, paddingVertical: 9, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }, configurationItemName: { flex: 1, fontSize: 13, fontWeight: "700" }, configurationCurrent: { fontSize: 11, fontWeight: "800" },
+  modalBackdrop: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 22, backgroundColor: "rgba(0,0,0,0.45)" }, modalCard: { width: "100%", maxWidth: 430, borderWidth: 1, borderRadius: 16, padding: 16 }, modalTitle: { fontSize: 18, fontWeight: "800" }, modalHint: { fontSize: 12, marginTop: 5, marginBottom: 10 }, modalInput: { height: 44, borderWidth: 1, borderRadius: 10, paddingHorizontal: 11, fontSize: 15, fontWeight: "700" }, modalActions: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 14 }, modalActionButton: { minHeight: 40, minWidth: 88, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 }, modalSaveButton: { minWidth: 110 }, modalCancelText: { fontSize: 13, fontWeight: "800" }, modalSaveText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
   footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1 }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { minHeight: 50, borderRadius: 14, alignItems: "center", justifyContent: "center", paddingHorizontal: 10, paddingVertical: 8 }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800", textAlign: "center" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
 });
