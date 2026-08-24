@@ -7,8 +7,17 @@ const PLUGIN_VERSION = "1.0.0";
 
 function withTimeShizuku(config) {
   config = withAndroidManifest(config, (mod) => {
-    const application = mod.modResults.manifest.application?.[0];
+    const manifest = mod.modResults.manifest;
+    const application = manifest.application?.[0];
     if (!application) throw new Error("Android application node was not found in AndroidManifest.xml");
+
+    manifest["uses-permission"] = manifest["uses-permission"] ?? [];
+    for (const permissionName of ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"]) {
+      if (!manifest["uses-permission"].some((permission) => permission.$?.["android:name"] === permissionName)) {
+        manifest["uses-permission"].push({ $: { "android:name": permissionName } });
+      }
+    }
+
     application.provider = application.provider ?? [];
     const providerName = "rikka.shizuku.ShizukuProvider";
     if (!application.provider.some((provider) => provider.$?.["android:name"] === providerName)) {
@@ -21,6 +30,27 @@ function withTimeShizuku(config) {
           "android:exported": "true",
           "android:permission": "android.permission.INTERACT_ACROSS_USERS_FULL",
         },
+      });
+    }
+
+    application.service = application.service ?? [];
+    const serviceName = `${config.android.package}.timeaccessibility.TimeCycleForegroundService`;
+    if (!application.service.some((service) => service.$?.["android:name"] === serviceName)) {
+      application.service.push({
+        $: {
+          "android:name": serviceName,
+          "android:enabled": "true",
+          "android:exported": "false",
+          "android:foregroundServiceType": "specialUse",
+        },
+        property: [
+          {
+            $: {
+              "android:name": "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE",
+              "android:value": "User-started cyclic system time operation",
+            },
+          },
+        ],
       });
     }
     return mod;
@@ -58,7 +88,7 @@ function withTimeShizuku(config) {
     const aidlRoot = path.join(projectRoot, "app", "src", "main", "aidl", ...packageName.split("."), "timeaccessibility");
     fs.mkdirSync(kotlinRoot, { recursive: true });
     fs.mkdirSync(aidlRoot, { recursive: true });
-    for (const fileName of ["TimeControlModule.kt", "TimeControlPackage.kt", "TimeCycleStore.kt", "TimeShizukuController.kt", "TimeShizukuCycleRunner.kt", "TimeShizukuUserService.kt"]) {
+    for (const fileName of ["TimeControlModule.kt", "TimeControlPackage.kt", "TimeCycleStore.kt", "TimeShizukuController.kt", "TimeShizukuCycleRunner.kt", "TimeShizukuUserService.kt", "TimeCycleForegroundService.kt"]) {
       const source = fs.readFileSync(path.join(sourceRoot, fileName), "utf8");
       fs.writeFileSync(path.join(kotlinRoot, fileName), source.replaceAll("__PACKAGE__", packageName));
     }
