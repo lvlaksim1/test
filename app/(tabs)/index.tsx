@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from "react-native";
 
 import { ScreenContainer } from "@/components/screen-container";
+import { UiInspectionModal } from "@/components/ui-inspection-modal";
 import { useColors } from "@/hooks/use-colors";
 import { type CycleForm, formatDateTime, getDefaultForm, parseCycleForm, toFormStart } from "@/lib/cycle-utils";
 import { formatJournalForCopy } from "@/lib/journal-export";
@@ -13,12 +14,15 @@ import {
   clearTimeEvents,
   getOpenApps,
   getTimeControlStatus,
+  inspectAppScreen,
   isNativeTimeControlAvailable,
   requestShizukuPermission,
   setAutomaticTime,
   startTimeCycle,
   stopTimeCycle,
+  type OpenAppInfo,
   type TimeControlStatus,
+  type UiElementInfo,
 } from "@/lib/time-control";
 
 const FORM_STORAGE_KEY = "time-cycler-form-v1";
@@ -121,8 +125,13 @@ export default function HomeScreen() {
   const [isBusy, setIsBusy] = useState(false);
   const [isLogExpanded, setIsLogExpanded] = useState(false);
   const [isAppsExpanded, setIsAppsExpanded] = useState(false);
-  const [openApps, setOpenApps] = useState<string[]>([]);
+  const [openApps, setOpenApps] = useState<OpenAppInfo[]>([]);
   const [isAppsLoading, setIsAppsLoading] = useState(false);
+  const [selectedApp, setSelectedApp] = useState<OpenAppInfo | null>(null);
+  const [inspectionElements, setInspectionElements] = useState<UiElementInfo[]>([]);
+  const [inspectionVisible, setInspectionVisible] = useState(false);
+  const [inspectionLoading, setInspectionLoading] = useState(false);
+  const [inspectionError, setInspectionError] = useState<string | null>(null);
   const [activeField, setActiveField] = useState<AdjustableField | null>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -185,11 +194,30 @@ export default function HomeScreen() {
   }, [shizukuReady]);
 
   useEffect(() => {
-    if (!isAppsExpanded) return;
+    if (!isAppsExpanded || inspectionLoading) return;
     void refreshOpenApps();
     const interval = setInterval(() => void refreshOpenApps(), 3000);
     return () => clearInterval(interval);
-  }, [isAppsExpanded, refreshOpenApps]);
+  }, [inspectionLoading, isAppsExpanded, refreshOpenApps]);
+
+  const handleInspectApp = async (app: OpenAppInfo) => {
+    if (!shizukuReady || inspectionLoading) return;
+    setSelectedApp(app);
+    setInspectionElements([]);
+    setInspectionError(null);
+    setInspectionLoading(true);
+    setInspectionVisible(true);
+    try {
+      const elements = await inspectAppScreen(app.packageName);
+      setInspectionElements(elements);
+      if (Platform.OS !== "web") await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      setInspectionError(error instanceof Error ? error.message : "Не удалось получить элементы экрана выбранного приложения.");
+    } finally {
+      setInspectionLoading(false);
+      void refreshOpenApps();
+    }
+  };
 
   const updateField = (field: keyof CycleForm) => (value: string) => persistForm((previous) => ({ ...previous, [field]: value }));
   const updateNumericField = (field: NumericField, allowNegative = false) => (value: string) => {
@@ -410,10 +438,11 @@ export default function HomeScreen() {
                 ) : isAppsLoading && !openApps.length ? (
                   <Text style={[styles.emptyLogText, { color: colors.muted }]}>Обновление списка…</Text>
                 ) : openApps.length ? (
-                  openApps.map((packageName) => (
-                    <View key={packageName} style={[styles.appItem, { backgroundColor: colors.background }]}>
-                      <Text style={[styles.appName, { color: colors.text }]}>{packageName}</Text>
-                    </View>
+                  openApps.map((app) => (
+                    <Pressable key={app.packageName} disabled={inspectionLoading} onPress={() => handleInspectApp(app)} style={({ pressed }) => [styles.appItem, { backgroundColor: colors.background }, (pressed || inspectionLoading) && styles.pressed]}>
+                      <Text style={[styles.appName, { color: colors.text }]}>{app.label} ({app.processNames.join(", ") || app.packageName})</Text>
+                      <Text style={[styles.appPackage, { color: colors.muted }]}>{app.packageName} · нажмите для просмотра элементов экрана</Text>
+                    </Pressable>
                   ))
                 ) : (
                   <Text style={[styles.emptyLogText, { color: colors.muted }]}>Открытые приложения не найдены.</Text>
@@ -447,6 +476,15 @@ export default function HomeScreen() {
           )}
         </View>
       </KeyboardAvoidingView>
+
+      <UiInspectionModal
+        visible={inspectionVisible}
+        app={selectedApp}
+        elements={inspectionElements}
+        loading={inspectionLoading}
+        error={inspectionError}
+        onClose={() => setInspectionVisible(false)}
+      />
     </ScreenContainer>
   );
 }
@@ -460,6 +498,6 @@ const styles = StyleSheet.create({
   card: { borderRadius: 14, padding: 12, borderWidth: 1 }, cardHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }, cardTitle: { fontSize: 15, lineHeight: 20, fontWeight: "800" }, startActions: { flexDirection: "row", gap: 6 }, nowButton: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 }, nowButtonText: { fontSize: 12, fontWeight: "800" },
   row: { flexDirection: "row", gap: 8, marginTop: 9 }, rowPrimary: { flex: 1.35 }, rowSecondary: { flex: 1 }, tripleRow: { flexDirection: "row", gap: 7, marginTop: 9 }, fieldWrap: { flex: 1 }, fieldLabel: { fontSize: 11, fontWeight: "700", marginBottom: 4 }, input: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, height: 40, fontSize: 15, fontWeight: "700" },
   adjusterPanel: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 6 }, adjusterLabel: { textAlign: "center", fontSize: 12, fontWeight: "800" }, adjuster: { height: 56, flexDirection: "row", borderRadius: 14, borderWidth: 1, overflow: "hidden" }, adjusterButton: { flex: 1, alignItems: "center", justifyContent: "center" }, adjusterDivider: { width: 1 }, adjusterGlyph: { fontSize: 34, lineHeight: 38, fontWeight: "700" },
-  logCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" }, logToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12 }, chevron: { fontSize: 20, lineHeight: 20, fontWeight: "800" }, appsList: { paddingHorizontal: 10, paddingBottom: 10, gap: 6 }, appItem: { borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8 }, appName: { fontSize: 12, fontWeight: "700" }, logActions: { flexDirection: "row", gap: 6, paddingHorizontal: 12, paddingBottom: 8 }, textAction: { paddingVertical: 5, paddingHorizontal: 7 }, textActionLabel: { fontSize: 12, fontWeight: "800" }, emptyLogText: { fontSize: 13, paddingHorizontal: 12, paddingBottom: 12 }, logItem: { marginHorizontal: 10, marginBottom: 7, borderRadius: 10, padding: 9 }, logTime: { fontSize: 10, fontWeight: "800", marginBottom: 3 }, logMessage: { fontSize: 12, lineHeight: 16 },
+  logCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" }, logToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12 }, chevron: { fontSize: 20, lineHeight: 20, fontWeight: "800" }, appsList: { paddingHorizontal: 10, paddingBottom: 10, gap: 6 }, appItem: { borderRadius: 9, paddingHorizontal: 10, paddingVertical: 9 }, appName: { fontSize: 12, fontWeight: "800", lineHeight: 16 }, appPackage: { fontSize: 10, marginTop: 2, lineHeight: 14 }, logActions: { flexDirection: "row", gap: 6, paddingHorizontal: 12, paddingBottom: 8 }, textAction: { paddingVertical: 5, paddingHorizontal: 7 }, textActionLabel: { fontSize: 12, fontWeight: "800" }, emptyLogText: { fontSize: 13, paddingHorizontal: 12, paddingBottom: 12 }, logItem: { marginHorizontal: 10, marginBottom: 7, borderRadius: 10, padding: 9 }, logTime: { fontSize: 10, fontWeight: "800", marginBottom: 3 }, logMessage: { fontSize: 12, lineHeight: 16 },
   footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1 }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
 });
