@@ -44,7 +44,7 @@ export function parseCycleForm(form: CycleForm): { config?: CycleConfig; error?:
     ["часы", form.stepHours, -999, 999],
     ["минуты", form.stepMinutes, -999, 999],
     ["пауза", form.pauseSeconds, 1, 86400],
-    ["количество циклов", form.totalCycles, 1, Number.MAX_SAFE_INTEGER],
+    ["количество циклов", form.totalCycles, 1, 9999],
   ] as const;
   const values: number[] = [];
   for (const [name, raw, min, max] of numericFields) {
