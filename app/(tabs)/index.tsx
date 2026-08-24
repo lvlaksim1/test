@@ -322,7 +322,7 @@ export default function HomeScreen() {
             <Pressable disabled={isBusy || !isNativeTimeControlAvailable} onPress={handleStart} style={({ pressed }) => [styles.primaryButton, { backgroundColor: colors.primary }, (pressed || isBusy || !isNativeTimeControlAvailable) && styles.pressed]}><Text style={styles.primaryButtonText}>Запустить цикл</Text></Pressable>
           )}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </ScreenContainer>
   );
 }
