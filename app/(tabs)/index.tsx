@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from "react-native";
 
 import { ScreenContainer } from "@/components/screen-container";
@@ -37,7 +37,7 @@ type FieldProps = {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
-  onFocus?: () => void;
+  onFocus?: TextInputProps["onFocus"];
   placeholder?: string;
   keyboardType?: TextInputProps["keyboardType"];
   editable?: boolean;
@@ -86,6 +86,7 @@ function normalizeNumericInput(value: string, allowNegative: boolean): string {
 
 export default function HomeScreen() {
   const colors = useColors();
+  const scrollRef = useRef<ScrollView>(null);
   const [form, setForm] = useState<CycleForm>(() => getDefaultForm());
   const [status, setStatus] = useState<TimeControlStatus>(initialStatus);
   const [isBusy, setIsBusy] = useState(false);
@@ -141,6 +142,14 @@ export default function HomeScreen() {
     persistForm((previous) => ({ ...previous, [field]: normalizeNumericInput(value, allowNegative) }));
   };
   const setCurrentStart = () => persistForm((previous) => ({ ...previous, ...toFormStart(Date.now()) }));
+  const focusField = (field: AdjustableField): NonNullable<TextInputProps["onFocus"]> => (event) => {
+    setActiveField(field);
+    if (Platform.OS !== "android") return;
+    const target = event.target;
+    setTimeout(() => {
+      scrollRef.current?.scrollResponderScrollNativeHandleToKeyboard(target, 110, true);
+    }, 250);
+  };
 
   const adjustActiveField = (delta: number) => {
     if (!activeField || running) return;
@@ -231,7 +240,7 @@ export default function HomeScreen() {
   return (
     <ScreenContainer edges={["top", "left", "right", "bottom"]} containerClassName="bg-background">
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}>
           <View style={styles.header}>
             <Text style={[styles.headerGlyph, { color: colors.primary }]}>◷</Text>
             <Text style={[styles.title, { color: colors.text }]}>Циклическое время</Text>
@@ -267,8 +276,8 @@ export default function HomeScreen() {
               </Pressable>
             </View>
             <View style={styles.row}>
-              <View style={styles.rowPrimary}><Field label="Дата" value={form.date} onChangeText={updateField("date")} onFocus={() => setActiveField("date")} placeholder="ДД.ММ.ГГГГ" editable={!running} /></View>
-              <View style={styles.rowSecondary}><Field label="Время" value={form.time} onChangeText={updateField("time")} onFocus={() => setActiveField("time")} placeholder="ЧЧ:ММ" editable={!running} /></View>
+              <View style={styles.rowPrimary}><Field label="Дата" value={form.date} onChangeText={updateField("date")} onFocus={focusField("date")} placeholder="ДД.ММ.ГГГГ" editable={!running} /></View>
+              <View style={styles.rowSecondary}><Field label="Время" value={form.time} onChangeText={updateField("time")} onFocus={focusField("time")} placeholder="ЧЧ:ММ" editable={!running} /></View>
             </View>
           </View>
 
@@ -284,17 +293,17 @@ export default function HomeScreen() {
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>Шаг изменения</Text>
             <View style={styles.tripleRow}>
-              <Field label="Дней" value={form.stepDays} onChangeText={updateNumericField("stepDays", true)} onFocus={() => setActiveField("stepDays")} keyboardType="numeric" editable={!running} />
-              <Field label="Часов" value={form.stepHours} onChangeText={updateNumericField("stepHours", true)} onFocus={() => setActiveField("stepHours")} keyboardType="numeric" editable={!running} />
-              <Field label="Минут" value={form.stepMinutes} onChangeText={updateNumericField("stepMinutes", true)} onFocus={() => setActiveField("stepMinutes")} keyboardType="numeric" editable={!running} />
+              <Field label="Дней" value={form.stepDays} onChangeText={updateNumericField("stepDays", true)} onFocus={focusField("stepDays")} keyboardType="numeric" editable={!running} />
+              <Field label="Часов" value={form.stepHours} onChangeText={updateNumericField("stepHours", true)} onFocus={focusField("stepHours")} keyboardType="numeric" editable={!running} />
+              <Field label="Минут" value={form.stepMinutes} onChangeText={updateNumericField("stepMinutes", true)} onFocus={focusField("stepMinutes")} keyboardType="numeric" editable={!running} />
             </View>
           </View>
 
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>Повторение</Text>
             <View style={styles.row}>
-              <View style={styles.rowPrimary}><Field label="Пауза, сек." value={form.pauseSeconds} onChangeText={updateNumericField("pauseSeconds")} onFocus={() => setActiveField("pauseSeconds")} keyboardType="number-pad" editable={!running} /></View>
-              <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalCycles} onChangeText={updateNumericField("totalCycles")} onFocus={() => setActiveField("totalCycles")} keyboardType="number-pad" editable={!running} /></View>
+              <View style={styles.rowPrimary}><Field label="Пауза, сек." value={form.pauseSeconds} onChangeText={updateNumericField("pauseSeconds")} onFocus={focusField("pauseSeconds")} keyboardType="number-pad" editable={!running} /></View>
+              <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalCycles} onChangeText={updateNumericField("totalCycles")} onFocus={focusField("totalCycles")} keyboardType="number-pad" editable={!running} /></View>
             </View>
           </View>
 
@@ -328,7 +337,7 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 }, content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12, gap: 9 },
+  screen: { flex: 1 }, content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 96, gap: 9 },
   header: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 1 }, headerGlyph: { fontSize: 30, lineHeight: 34, fontWeight: "500" }, title: { fontSize: 22, fontWeight: "800", lineHeight: 27 },
   previewNotice: { borderRadius: 10, paddingVertical: 8, paddingHorizontal: 11, borderWidth: 1 }, previewText: { fontSize: 12, fontWeight: "600" },
   shizukuCard: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 8 }, syncButton: { minHeight: 34, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderRadius: 9, paddingHorizontal: 9 }, syncButtonText: { fontSize: 13, fontWeight: "800" }, syncChevron: { fontSize: 21, lineHeight: 21, fontWeight: "700" },
