@@ -76,7 +76,7 @@ class TimeShizukuUserService : ITimeShizukuService.Stub() {
     }
 
     private fun resolveLauncher(packageName: String): String {
-        val result = runCommand("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER '$packageName'")
+        val result = runCommand("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p '$packageName'")
         if (result.exitCode != 0) return ""
         return result.stdout.lineSequence().map { it.trim() }.lastOrNull { it.contains('/') } ?: ""
     }
