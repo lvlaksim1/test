@@ -3,7 +3,7 @@ name: Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, work-v1.0.22]
     paths:
       - "app.config.ts"
       - "eas.json"
@@ -74,6 +74,7 @@ jobs:
         run: cp android/app/build/outputs/apk/release/app-release.apk "cyclic-time-${{ steps.app_version.outputs.version }}.apk"
 
       - name: Publish APK release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.app_version.outputs.version }}
