@@ -68,7 +68,7 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
             require(total in 1..9999) { "Количество циклов должно быть от 1 до 9999." }
             require(days in -999..999 && hours in -999..999 && minutes in -999..999) { "Шаг задан вне допустимого диапазона." }
             TimeCycleStore.saveAndStart(context, startAt, days, hours, minutes, pause, total)
-            TimeShizukuCycleRunner.start(context)
+            TimeCycleForegroundService.start(context)
         }.onSuccess { promise.resolve(jsonToWritableMap(TimeCycleStore.status(context))) }
             .onFailure { promise.reject("START_FAILED", it.message ?: "Не удалось запустить цикл.", it) }
     }
@@ -77,6 +77,7 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
     fun stopCycle(promise: Promise) {
         TimeShizukuCycleRunner.stop()
         TimeCycleStore.stop(context)
+        TimeCycleForegroundService.stop(context)
         promise.resolve(jsonToWritableMap(TimeCycleStore.status(context)))
     }
 
