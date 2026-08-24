@@ -65,7 +65,7 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
             val pause = settings.getInt("pauseSeconds")
             val total = settings.getInt("totalCycles")
             require(pause in 1..86400) { "Пауза должна быть от 1 секунды до 24 часов." }
-            require(total in 1..9999) { "Количество циклов должно быть от 1 до 9999." }
+            require(total in 1..99999) { "Количество циклов должно быть от 1 до 99999." }
             require(days in -999..999 && hours in -999..999 && minutes in -999..999) { "Шаг задан вне допустимого диапазона." }
             TimeCycleStore.saveAndStart(context, startAt, days, hours, minutes, pause, total)
             TimeCycleForegroundService.start(context)
