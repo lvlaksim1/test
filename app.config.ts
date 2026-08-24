@@ -45,6 +45,7 @@ const config: ExpoConfig = {
     },
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
+    softwareKeyboardLayoutMode: "resize",
     package: env.androidPackage,
     versionCode: 117,
     permissions: ["POST_NOTIFICATIONS"],
