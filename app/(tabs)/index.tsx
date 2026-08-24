@@ -84,6 +84,18 @@ function normalizeNumericInput(value: string, allowNegative: boolean): string {
   return hasMinus ? `-${digits}` : digits;
 }
 
+async function getRealCurrentTimeMillis(): Promise<number> {
+  const response = await fetch("https://www.google.com/generate_204", {
+    method: "HEAD",
+    cache: "no-store",
+  });
+  const dateHeader = response.headers.get("date");
+  if (!dateHeader) throw new Error("Сервер времени не вернул дату.");
+  const millis = Date.parse(dateHeader);
+  if (!Number.isFinite(millis)) throw new Error("Не удалось распознать время сервера.");
+  return millis;
+}
+
 export default function HomeScreen() {
   const colors = useColors();
   const scrollRef = useRef<ScrollView>(null);
@@ -141,7 +153,19 @@ export default function HomeScreen() {
   const updateNumericField = (field: NumericField, allowNegative = false) => (value: string) => {
     persistForm((previous) => ({ ...previous, [field]: normalizeNumericInput(value, allowNegative) }));
   };
-  const setCurrentStart = () => persistForm((previous) => ({ ...previous, ...toFormStart(Date.now()) }));
+  const setCurrentStart = async () => {
+    if (running || isBusy) return;
+    setIsBusy(true);
+    try {
+      const realNow = await getRealCurrentTimeMillis();
+      persistForm((previous) => ({ ...previous, ...toFormStart(realNow) }));
+      if (Platform.OS !== "web") await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      Alert.alert("Не удалось получить текущее время", error instanceof Error ? error.message : "Проверьте подключение к интернету.");
+    } finally {
+      setIsBusy(false);
+    }
+  };
   const focusField = (field: AdjustableField): NonNullable<TextInputProps["onFocus"]> => (event) => {
     setActiveField(field);
     if (Platform.OS !== "android") return;
@@ -271,7 +295,7 @@ export default function HomeScreen() {
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <View style={styles.cardHeading}>
               <Text style={[styles.cardTitle, { color: colors.text }]}>Старт</Text>
-              <Pressable disabled={running} onPress={setCurrentStart} style={({ pressed }) => [styles.nowButton, { borderColor: colors.primary }, (pressed || running) && styles.pressed]}>
+              <Pressable disabled={running || isBusy} onPress={setCurrentStart} style={({ pressed }) => [styles.nowButton, { borderColor: colors.primary }, (pressed || running || isBusy) && styles.pressed]}>
                 <Text style={[styles.nowButtonText, { color: colors.primary }]}>Сейчас</Text>
               </Pressable>
             </View>
