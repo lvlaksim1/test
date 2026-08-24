@@ -19,6 +19,8 @@ type NativeTimeControl = {
   getStatus: () => Promise<TimeControlStatus>;
   requestShizukuPermission: () => Promise<boolean>;
   setAutomaticTime: (enabled: boolean) => Promise<TimeControlStatus>;
+  applyTime: (targetMillis: number) => Promise<TimeControlStatus>;
+  getOpenApps: () => Promise<string[]>;
   startCycle: (config: CycleConfig) => Promise<TimeControlStatus>;
   stopCycle: () => Promise<TimeControlStatus>;
   clearEvents: () => Promise<boolean>;
@@ -36,6 +38,14 @@ export async function requestShizukuPermission(): Promise<boolean> {
 export async function setAutomaticTime(enabled: boolean): Promise<TimeControlStatus> {
   if (!nativeModule) throw new Error("Переключатель синхронизации доступен только в собранном Android APK.");
   return nativeModule.setAutomaticTime(enabled);
+}
+export async function applyTime(targetMillis: number): Promise<TimeControlStatus> {
+  if (!nativeModule) throw new Error("Изменение времени доступно только в собранном Android APK.");
+  return nativeModule.applyTime(targetMillis);
+}
+export async function getOpenApps(): Promise<string[]> {
+  if (!nativeModule) throw new Error("Список открытых приложений доступен только в собранном Android APK.");
+  return nativeModule.getOpenApps();
 }
 export async function startTimeCycle(config: CycleConfig): Promise<TimeControlStatus> {
   if (!nativeModule) throw new Error("Изменение времени доступно только в собранном Android APK.");

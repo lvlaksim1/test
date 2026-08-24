@@ -9,7 +9,9 @@ import { useColors } from "@/hooks/use-colors";
 import { type CycleForm, formatDateTime, getDefaultForm, parseCycleForm, toFormStart } from "@/lib/cycle-utils";
 import { formatJournalForCopy } from "@/lib/journal-export";
 import {
+  applyTime,
   clearTimeEvents,
+  getOpenApps,
   getTimeControlStatus,
   isNativeTimeControlAvailable,
   requestShizukuPermission,
@@ -84,6 +86,21 @@ function normalizeNumericInput(value: string, allowNegative: boolean): string {
   return hasMinus ? `-${digits}` : digits;
 }
 
+function parseStartFields(form: Pick<CycleForm, "date" | "time">): number | null {
+  const dateMatch = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(form.date.trim());
+  const timeMatch = /^(\d{2}):(\d{2})$/.exec(form.time.trim());
+  if (!dateMatch || !timeMatch) return null;
+  const day = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const year = Number(dateMatch[3]);
+  const hours = Number(timeMatch[1]);
+  const minutes = Number(timeMatch[2]);
+  if (hours > 23 || minutes > 59) return null;
+  const candidate = new Date(year, month - 1, day, hours, minutes, 0, 0);
+  if (candidate.getFullYear() !== year || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) return null;
+  return candidate.getTime();
+}
+
 async function getRealCurrentTimeMillis(): Promise<number> {
   const response = await fetch("https://www.google.com/generate_204", {
     method: "HEAD",
@@ -103,6 +120,9 @@ export default function HomeScreen() {
   const [status, setStatus] = useState<TimeControlStatus>(initialStatus);
   const [isBusy, setIsBusy] = useState(false);
   const [isLogExpanded, setIsLogExpanded] = useState(false);
+  const [isAppsExpanded, setIsAppsExpanded] = useState(false);
+  const [openApps, setOpenApps] = useState<string[]>([]);
+  const [isAppsLoading, setIsAppsLoading] = useState(false);
   const [activeField, setActiveField] = useState<AdjustableField | null>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -149,6 +169,28 @@ export default function HomeScreen() {
   const running = status.isRunning;
   const activeCycle = running ? Math.max(1, Math.min(status.completedCycles + 1, status.totalCycles)) : 0;
 
+  const refreshOpenApps = useCallback(async () => {
+    if (!shizukuReady || !isNativeTimeControlAvailable) {
+      setOpenApps([]);
+      return;
+    }
+    setIsAppsLoading(true);
+    try {
+      setOpenApps(await getOpenApps());
+    } catch {
+      setOpenApps([]);
+    } finally {
+      setIsAppsLoading(false);
+    }
+  }, [shizukuReady]);
+
+  useEffect(() => {
+    if (!isAppsExpanded) return;
+    void refreshOpenApps();
+    const interval = setInterval(() => void refreshOpenApps(), 3000);
+    return () => clearInterval(interval);
+  }, [isAppsExpanded, refreshOpenApps]);
+
   const updateField = (field: keyof CycleForm) => (value: string) => persistForm((previous) => ({ ...previous, [field]: value }));
   const updateNumericField = (field: NumericField, allowNegative = false) => (value: string) => {
     persistForm((previous) => ({ ...previous, [field]: normalizeNumericInput(value, allowNegative) }));
@@ -162,6 +204,26 @@ export default function HomeScreen() {
       if (Platform.OS !== "web") await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (error) {
       Alert.alert("Не удалось получить текущее время", error instanceof Error ? error.message : "Проверьте подключение к интернету.");
+    } finally {
+      setIsBusy(false);
+    }
+  };
+  const applyStartToPhone = async () => {
+    const targetMillis = parseStartFields(form);
+    if (targetMillis === null) {
+      Alert.alert("Проверьте дату и время", "Введите дату в формате ДД.ММ.ГГГГ и время в формате ЧЧ:ММ.");
+      return;
+    }
+    if (!shizukuReady) {
+      Alert.alert("Нужен Shizuku", "Сначала запустите Shizuku и выдайте доступ приложению.");
+      return;
+    }
+    setIsBusy(true);
+    try {
+      setStatus(await applyTime(targetMillis));
+      if (Platform.OS !== "web") await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      Alert.alert("Время не установлено", error instanceof Error ? error.message : "Повторите попытку.");
     } finally {
       setIsBusy(false);
     }
@@ -295,9 +357,14 @@ export default function HomeScreen() {
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <View style={styles.cardHeading}>
               <Text style={[styles.cardTitle, { color: colors.text }]}>Старт</Text>
-              <Pressable disabled={running || isBusy} onPress={setCurrentStart} style={({ pressed }) => [styles.nowButton, { borderColor: colors.primary }, (pressed || running || isBusy) && styles.pressed]}>
-                <Text style={[styles.nowButtonText, { color: colors.primary }]}>Сейчас</Text>
-              </Pressable>
+              <View style={styles.startActions}>
+                <Pressable disabled={running || isBusy} onPress={applyStartToPhone} style={({ pressed }) => [styles.nowButton, { borderColor: colors.primary }, (pressed || running || isBusy) && styles.pressed]}>
+                  <Text style={[styles.nowButtonText, { color: colors.primary }]}>Установить</Text>
+                </Pressable>
+                <Pressable disabled={running || isBusy} onPress={setCurrentStart} style={({ pressed }) => [styles.nowButton, { borderColor: colors.primary }, (pressed || running || isBusy) && styles.pressed]}>
+                  <Text style={[styles.nowButtonText, { color: colors.primary }]}>Сейчас</Text>
+                </Pressable>
+              </View>
             </View>
             <View style={styles.row}>
               <View style={styles.rowPrimary}><Field label="Дата" value={form.date} onChangeText={updateField("date")} onFocus={focusField("date")} placeholder="ДД.ММ.ГГГГ" editable={!running} /></View>
@@ -329,6 +396,30 @@ export default function HomeScreen() {
               <View style={styles.rowPrimary}><Field label="Пауза, сек." value={form.pauseSeconds} onChangeText={updateNumericField("pauseSeconds")} onFocus={focusField("pauseSeconds")} keyboardType="number-pad" editable={!running} /></View>
               <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalCycles} onChangeText={updateNumericField("totalCycles")} onFocus={focusField("totalCycles")} keyboardType="number-pad" editable={!running} /></View>
             </View>
+          </View>
+
+          <View style={[styles.logCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Pressable onPress={() => setIsAppsExpanded((previous) => !previous)} style={({ pressed }) => [styles.logToggle, pressed && styles.pressed]}>
+              <Text style={[styles.cardTitle, { color: colors.text }]}>Открытые приложения</Text>
+              <Text style={[styles.chevron, { color: colors.primary }]}>{isAppsExpanded ? "⌃" : "⌄"}</Text>
+            </Pressable>
+            {isAppsExpanded && (
+              <View style={styles.appsList}>
+                {!shizukuReady ? (
+                  <Text style={[styles.emptyLogText, { color: colors.muted }]}>Для просмотра списка нужен доступ Shizuku.</Text>
+                ) : isAppsLoading && !openApps.length ? (
+                  <Text style={[styles.emptyLogText, { color: colors.muted }]}>Обновление списка…</Text>
+                ) : openApps.length ? (
+                  openApps.map((packageName) => (
+                    <View key={packageName} style={[styles.appItem, { backgroundColor: colors.background }]}>
+                      <Text style={[styles.appName, { color: colors.text }]}>{packageName}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={[styles.emptyLogText, { color: colors.muted }]}>Открытые приложения не найдены.</Text>
+                )}
+              </View>
+            )}
           </View>
 
           <View style={[styles.logCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -366,9 +457,9 @@ const styles = StyleSheet.create({
   previewNotice: { borderRadius: 10, paddingVertical: 8, paddingHorizontal: 11, borderWidth: 1 }, previewText: { fontSize: 12, fontWeight: "600" },
   shizukuCard: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 8 }, syncButton: { minHeight: 34, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderRadius: 9, paddingHorizontal: 9 }, syncButtonText: { fontSize: 13, fontWeight: "800" }, syncChevron: { fontSize: 21, lineHeight: 21, fontWeight: "700" },
   automaticTimeRow: { borderTopWidth: 1, paddingTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, automaticTimeText: { flex: 1, paddingRight: 8 }, automaticTimeTitle: { fontSize: 13, fontWeight: "800" }, automaticTimeHint: { fontSize: 11, marginTop: 2 },
-  card: { borderRadius: 14, padding: 12, borderWidth: 1 }, cardHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, cardTitle: { fontSize: 15, lineHeight: 20, fontWeight: "800" }, nowButton: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 }, nowButtonText: { fontSize: 12, fontWeight: "800" },
+  card: { borderRadius: 14, padding: 12, borderWidth: 1 }, cardHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }, cardTitle: { fontSize: 15, lineHeight: 20, fontWeight: "800" }, startActions: { flexDirection: "row", gap: 6 }, nowButton: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 }, nowButtonText: { fontSize: 12, fontWeight: "800" },
   row: { flexDirection: "row", gap: 8, marginTop: 9 }, rowPrimary: { flex: 1.35 }, rowSecondary: { flex: 1 }, tripleRow: { flexDirection: "row", gap: 7, marginTop: 9 }, fieldWrap: { flex: 1 }, fieldLabel: { fontSize: 11, fontWeight: "700", marginBottom: 4 }, input: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, height: 40, fontSize: 15, fontWeight: "700" },
   adjusterPanel: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 6 }, adjusterLabel: { textAlign: "center", fontSize: 12, fontWeight: "800" }, adjuster: { height: 56, flexDirection: "row", borderRadius: 14, borderWidth: 1, overflow: "hidden" }, adjusterButton: { flex: 1, alignItems: "center", justifyContent: "center" }, adjusterDivider: { width: 1 }, adjusterGlyph: { fontSize: 34, lineHeight: 38, fontWeight: "700" },
-  logCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" }, logToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12 }, chevron: { fontSize: 20, lineHeight: 20, fontWeight: "800" }, logActions: { flexDirection: "row", gap: 6, paddingHorizontal: 12, paddingBottom: 8 }, textAction: { paddingVertical: 5, paddingHorizontal: 7 }, textActionLabel: { fontSize: 12, fontWeight: "800" }, emptyLogText: { fontSize: 13, paddingHorizontal: 12, paddingBottom: 12 }, logItem: { marginHorizontal: 10, marginBottom: 7, borderRadius: 10, padding: 9 }, logTime: { fontSize: 10, fontWeight: "800", marginBottom: 3 }, logMessage: { fontSize: 12, lineHeight: 16 },
+  logCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" }, logToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12 }, chevron: { fontSize: 20, lineHeight: 20, fontWeight: "800" }, appsList: { paddingHorizontal: 10, paddingBottom: 10, gap: 6 }, appItem: { borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8 }, appName: { fontSize: 12, fontWeight: "700" }, logActions: { flexDirection: "row", gap: 6, paddingHorizontal: 12, paddingBottom: 8 }, textAction: { paddingVertical: 5, paddingHorizontal: 7 }, textActionLabel: { fontSize: 12, fontWeight: "800" }, emptyLogText: { fontSize: 13, paddingHorizontal: 12, paddingBottom: 12 }, logItem: { marginHorizontal: 10, marginBottom: 7, borderRadius: 10, padding: 9 }, logTime: { fontSize: 10, fontWeight: "800", marginBottom: 3 }, logMessage: { fontSize: 12, lineHeight: 16 },
   footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1 }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
 });

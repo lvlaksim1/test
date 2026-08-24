@@ -51,6 +51,50 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
     }
 
     @ReactMethod
+    fun applyTime(targetMillis: Double, promise: Promise) {
+        if (TimeCycleStore.isRunning(context)) {
+            promise.reject("CYCLE_RUNNING", "Нельзя вручную менять время во время выполнения цикла.")
+            return
+        }
+        val shizuku = TimeShizukuController.state()
+        if (!shizuku.isPermissionGranted) {
+            promise.reject("SHIZUKU_PERMISSION_REQUIRED", "Сначала запустите Shizuku и выдайте доступ приложению.")
+            return
+        }
+        TimeShizukuController.applyTime(context, targetMillis.toLong()) { outcome ->
+            if (outcome.isSuccess) {
+                TimeCycleStore.setAutomaticTimeEnabled(context, false)
+                TimeCycleStore.addEvent(context, outcome.detail)
+                promise.resolve(jsonToWritableMap(TimeCycleStore.status(context)))
+            } else {
+                promise.reject("APPLY_TIME_FAILED", outcome.detail)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun getOpenApps(promise: Promise) {
+        val shizuku = TimeShizukuController.state()
+        if (!shizuku.isPermissionGranted) {
+            promise.reject("SHIZUKU_PERMISSION_REQUIRED", "Сначала запустите Shizuku и выдайте доступ приложению.")
+            return
+        }
+        TimeShizukuController.listOpenApps(context) { outcome ->
+            if (!outcome.isSuccess) {
+                promise.reject("OPEN_APPS_FAILED", outcome.detail)
+                return@listOpenApps
+            }
+            val result = Arguments.createArray()
+            outcome.detail.removePrefix("OK:").lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .forEach { result.pushString(it) }
+            promise.resolve(result)
+        }
+    }
+
+    @ReactMethod
     fun startCycle(settings: ReadableMap, promise: Promise) {
         val shizuku = TimeShizukuController.state()
         if (!shizuku.isPermissionGranted) {

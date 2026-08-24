@@ -42,6 +42,18 @@ class TimeShizukuUserService : ITimeShizukuService.Stub() {
         }
     }
 
+    override fun listOpenApps(): String {
+        val activities = runCommand("dumpsys activity activities")
+        if (activities.exitCode != 0) return "ОШИБКА: ${compact(activities.describe())}"
+
+        val packages = linkedSetOf<String>()
+        val packagePattern = Regex("""u\d+\s+([A-Za-z0-9._]+)/""")
+        activities.stdout.lineSequence().forEach { line ->
+            packagePattern.find(line)?.groupValues?.getOrNull(1)?.let { packages.add(it) }
+        }
+        return "OK:\n" + packages.joinToString("\n")
+    }
+
     override fun destroy() {
         // Недаэмонская служба Shizuku завершается вместе с клиентом.
     }
