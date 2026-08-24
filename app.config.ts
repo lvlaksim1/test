@@ -25,7 +25,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.17",
+  version: "1.0.18",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -43,11 +43,11 @@ const config: ExpoConfig = {
       backgroundImage: "./assets/images/android-icon-background.png",
       monochromeImage: "./assets/images/android-icon-monochrome.png",
     },
-    edgeToEdgeEnabled: true,
+    edgeToEdgeEnabled: false,
     predictiveBackGestureEnabled: false,
     softwareKeyboardLayoutMode: "resize",
     package: env.androidPackage,
-    versionCode: 117,
+    versionCode: 118,
     permissions: ["POST_NOTIFICATIONS"],
   },
   web: {
