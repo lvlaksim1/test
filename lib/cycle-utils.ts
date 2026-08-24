@@ -5,7 +5,9 @@ export type CycleForm = {
   stepHours: string;
   stepMinutes: string;
   pauseSeconds: string;
-  totalCycles: string;
+  repeatsPerSeries: string;
+  seriesPauseSeconds: string;
+  totalSeries: string;
 };
 
 export type CycleConfig = {
@@ -14,6 +16,9 @@ export type CycleConfig = {
   stepHours: number;
   stepMinutes: number;
   pauseSeconds: number;
+  repeatsPerSeries: number;
+  seriesPauseSeconds: number;
+  totalSeries: number;
   totalCycles: number;
 };
 
@@ -24,7 +29,17 @@ export function getDefaultForm(now = new Date()): CycleForm {
     .map((part, index) => index < 2 ? String(part).padStart(2, "0") : String(part))
     .join(".");
   const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  return { date, time, stepDays: "0", stepHours: "2", stepMinutes: "0", pauseSeconds: "2", totalCycles: "2" };
+  return {
+    date,
+    time,
+    stepDays: "0",
+    stepHours: "2",
+    stepMinutes: "0",
+    pauseSeconds: "2",
+    repeatsPerSeries: "2",
+    seriesPauseSeconds: "60",
+    totalSeries: "1",
+  };
 }
 
 export function parseCycleForm(form: CycleForm): { config?: CycleConfig; error?: string } {
@@ -43,8 +58,10 @@ export function parseCycleForm(form: CycleForm): { config?: CycleConfig; error?:
     ["дни", form.stepDays, -999, 999],
     ["часы", form.stepHours, -999, 999],
     ["минуты", form.stepMinutes, -999, 999],
-    ["пауза", form.pauseSeconds, 1, 86400],
-    ["количество циклов", form.totalCycles, 1, 99999],
+    ["пауза между повторами", form.pauseSeconds, 1, 86400],
+    ["повторы во вложенном цикле", form.repeatsPerSeries, 1, 99999],
+    ["пауза между главными циклами", form.seriesPauseSeconds, 0, 86400],
+    ["главные циклы", form.totalSeries, 1, 99999],
   ] as const;
   const values: number[] = [];
   for (const [name, raw, min, max] of numericFields) {
@@ -56,7 +73,24 @@ export function parseCycleForm(form: CycleForm): { config?: CycleConfig; error?:
   }
   if (values[0] + values[1] + values[2] === 0) return { error: "Шаг изменения не может состоять только из нулей." };
 
-  return { config: { startAtMillis: start.getTime(), stepDays: values[0], stepHours: values[1], stepMinutes: values[2], pauseSeconds: values[3], totalCycles: values[4] } };
+  const repeatsPerSeries = values[4];
+  const totalSeries = values[6];
+  const totalCycles = repeatsPerSeries * totalSeries;
+  if (totalCycles > 99999) return { error: "Общее количество изменений не должно превышать 99999." };
+
+  return {
+    config: {
+      startAtMillis: start.getTime(),
+      stepDays: values[0],
+      stepHours: values[1],
+      stepMinutes: values[2],
+      pauseSeconds: values[3],
+      repeatsPerSeries,
+      seriesPauseSeconds: values[5],
+      totalSeries,
+      totalCycles,
+    },
+  };
 }
 
 export function targetAt(config: CycleConfig, cycleIndex: number): Date {

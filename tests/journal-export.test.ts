@@ -9,7 +9,7 @@ describe("formatJournalForCopy", () => {
       { at: 2_000, message: "Диагностика выбора даты: полный текст" },
     ]);
 
-    expect(exported).toContain("Циклическое время — журнал действий");
+    expect(exported).toContain("Машина времени — журнал действий");
     expect(exported).toContain("Первая запись");
     expect(exported).toContain("Диагностика выбора даты: полный текст");
     expect(exported.indexOf("Диагностика выбора даты")).toBeLessThan(exported.indexOf("Первая запись"));

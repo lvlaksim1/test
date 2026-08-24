@@ -47,14 +47,14 @@ class TimeCycleForegroundService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
-        val channel = NotificationChannel(CHANNEL_ID, "Циклическое время", NotificationManager.IMPORTANCE_LOW)
+        val channel = NotificationChannel(CHANNEL_ID, "Машина времени", NotificationManager.IMPORTANCE_LOW)
         channel.description = "Выполнение активного цикла изменения системного времени"
         manager.createNotificationChannel(channel)
     }
 
     private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
         .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-        .setContentTitle("Циклическое время")
+        .setContentTitle("Машина времени")
         .setContentText("Цикл выполняется в фоновом режиме")
         .setOngoing(true)
         .setOnlyAlertOnce(true)

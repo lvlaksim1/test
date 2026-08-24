@@ -63,11 +63,18 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
             val hours = settings.getInt("stepHours")
             val minutes = settings.getInt("stepMinutes")
             val pause = settings.getInt("pauseSeconds")
+            val repeatsPerSeries = settings.getInt("repeatsPerSeries")
+            val seriesPause = settings.getInt("seriesPauseSeconds")
+            val totalSeries = settings.getInt("totalSeries")
             val total = settings.getInt("totalCycles")
-            require(pause in 1..86400) { "Пауза должна быть от 1 секунды до 24 часов." }
-            require(total in 1..99999) { "Количество циклов должно быть от 1 до 99999." }
+            require(pause in 1..86400) { "Пауза между повторами должна быть от 1 секунды до 24 часов." }
+            require(seriesPause in 0..86400) { "Пауза между главными циклами должна быть от 0 секунд до 24 часов." }
+            require(repeatsPerSeries in 1..99999) { "Количество повторов во вложенном цикле должно быть от 1 до 99999." }
+            require(totalSeries in 1..99999) { "Количество главных циклов должно быть от 1 до 99999." }
+            val calculatedTotal = repeatsPerSeries.toLong() * totalSeries.toLong()
+            require(calculatedTotal in 1L..99999L && total == calculatedTotal.toInt()) { "Общее количество изменений не должно превышать 99999." }
             require(days in -999..999 && hours in -999..999 && minutes in -999..999) { "Шаг задан вне допустимого диапазона." }
-            TimeCycleStore.saveAndStart(context, startAt, days, hours, minutes, pause, total)
+            TimeCycleStore.saveAndStart(context, startAt, days, hours, minutes, pause, repeatsPerSeries, seriesPause, totalSeries, total)
             TimeCycleForegroundService.start(context)
         }.onSuccess { promise.resolve(jsonToWritableMap(TimeCycleStore.status(context))) }
             .onFailure { promise.reject("START_FAILED", it.message ?: "Не удалось запустить цикл.", it) }

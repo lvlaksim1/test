@@ -2,7 +2,7 @@ import type { CycleEvent } from "@/lib/time-control";
 
 export function formatJournalForCopy(events: CycleEvent[]): string {
   const header = [
-    "Циклическое время — журнал действий",
+    "Машина времени — журнал действий",
     `Экспортировано: ${new Date().toLocaleString("ru-RU")}`,
     "",
   ];

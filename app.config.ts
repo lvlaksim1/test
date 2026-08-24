@@ -14,7 +14,7 @@ const bundleId =
     .join(".") || "space.manus.app";
 
 const env = {
-  appName: "Циклическое время",
+  appName: "Машина времени",
   appSlug: "android-time-cycler",
   logoUrl: "/manus-storage/android-time-cycler-icon_cca46255.png",
   scheme: "timecycler",
@@ -25,7 +25,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.20",
+  version: "1.0.21",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -47,7 +47,7 @@ const config: ExpoConfig = {
     predictiveBackGestureEnabled: false,
     softwareKeyboardLayoutMode: "resize",
     package: env.androidPackage,
-    versionCode: 120,
+    versionCode: 121,
     permissions: ["POST_NOTIFICATIONS"],
   },
   web: {

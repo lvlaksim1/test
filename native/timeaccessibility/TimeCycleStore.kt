@@ -16,6 +16,9 @@ object TimeCycleStore {
     private const val KEY_HOURS = "step_hours"
     private const val KEY_MINUTES = "step_minutes"
     private const val KEY_PAUSE = "pause_seconds"
+    private const val KEY_REPEATS_PER_SERIES = "repeats_per_series"
+    private const val KEY_SERIES_PAUSE = "series_pause_seconds"
+    private const val KEY_TOTAL_SERIES = "total_series"
     private const val KEY_TOTAL = "total_cycles"
     private const val KEY_COMPLETED = "completed_cycles"
     private const val KEY_RUNNING = "is_running"
@@ -33,6 +36,9 @@ object TimeCycleStore {
         stepHours: Int,
         stepMinutes: Int,
         pauseSeconds: Int,
+        repeatsPerSeries: Int,
+        seriesPauseSeconds: Int,
+        totalSeries: Int,
         totalCycles: Int,
     ) {
         prefs(context).edit()
@@ -41,12 +47,15 @@ object TimeCycleStore {
             .putInt(KEY_HOURS, stepHours)
             .putInt(KEY_MINUTES, stepMinutes)
             .putInt(KEY_PAUSE, pauseSeconds)
+            .putInt(KEY_REPEATS_PER_SERIES, repeatsPerSeries)
+            .putInt(KEY_SERIES_PAUSE, seriesPauseSeconds)
+            .putInt(KEY_TOTAL_SERIES, totalSeries)
             .putInt(KEY_TOTAL, totalCycles)
             .putInt(KEY_COMPLETED, 0)
             .putBoolean(KEY_RUNNING, true)
             .remove(KEY_LAST_APPLIED)
             .apply()
-        addEvent(context, "Цикл запущен: задано попыток — $totalCycles.")
+        addEvent(context, "Цикл запущен: главных циклов — $totalSeries, повторов в каждом — $repeatsPerSeries, всего изменений — $totalCycles.")
     }
 
     fun stop(context: Context, note: String = "Цикл остановлен пользователем.") {
@@ -57,7 +66,28 @@ object TimeCycleStore {
     fun isRunning(context: Context): Boolean = prefs(context).getBoolean(KEY_RUNNING, false)
     fun completedCycles(context: Context): Int = prefs(context).getInt(KEY_COMPLETED, 0)
     fun totalCycles(context: Context): Int = prefs(context).getInt(KEY_TOTAL, 0)
-    fun pauseMillis(context: Context): Long = prefs(context).getInt(KEY_PAUSE, 1).coerceAtLeast(1) * 1000L
+    fun repeatsPerSeries(context: Context): Int {
+        val storage = prefs(context)
+        return storage.getInt(KEY_REPEATS_PER_SERIES, storage.getInt(KEY_TOTAL, 1)).coerceAtLeast(1)
+    }
+    fun totalSeries(context: Context): Int = prefs(context).getInt(KEY_TOTAL_SERIES, 1).coerceAtLeast(1)
+
+    fun isBetweenSeriesPause(context: Context): Boolean {
+        val completed = completedCycles(context)
+        val total = totalCycles(context)
+        val repeats = repeatsPerSeries(context)
+        return completed > 0 && completed < total && completed % repeats == 0
+    }
+
+    fun pauseBeforeNextMillis(context: Context): Long {
+        val storage = prefs(context)
+        val seconds = if (isBetweenSeriesPause(context)) {
+            storage.getInt(KEY_SERIES_PAUSE, 0).coerceAtLeast(0)
+        } else {
+            storage.getInt(KEY_PAUSE, 1).coerceAtLeast(1)
+        }
+        return seconds * 1000L
+    }
 
     fun setAutomaticTimeEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTOMATIC_TIME, enabled).apply()
@@ -85,7 +115,7 @@ object TimeCycleStore {
             .apply()
         val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
         addEvent(context, "Применено значение $formatted. $detail")
-        if (!running) addEvent(context, "Все $total циклов завершены.")
+        if (!running) addEvent(context, "Все ${totalSeries(context)} главных циклов завершены. Выполнено изменений: $total.")
         return running
     }
 

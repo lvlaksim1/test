@@ -19,7 +19,7 @@ import {
   type TimeControlStatus,
 } from "@/lib/time-control";
 
-const FORM_STORAGE_KEY = "time-cycler-form-v1";
+const FORM_STORAGE_KEY = "time-machine-form-v2";
 
 const initialStatus: TimeControlStatus = {
   isShizukuRunning: false,
@@ -73,8 +73,10 @@ const fieldTitles: Record<AdjustableField, string> = {
   stepDays: "Дней",
   stepHours: "Часов",
   stepMinutes: "Минут",
-  pauseSeconds: "Пауза",
-  totalCycles: "Циклов",
+  pauseSeconds: "Пауза между повторами",
+  repeatsPerSeries: "Повторов во вложенном цикле",
+  seriesPauseSeconds: "Пауза между главными циклами",
+  totalSeries: "Главных циклов",
 };
 
 function normalizeNumericInput(value: string, allowNegative: boolean): string {
@@ -119,7 +121,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     AsyncStorage.getItem(FORM_STORAGE_KEY).then((stored) => {
-      if (stored) setForm(JSON.parse(stored) as CycleForm);
+      if (stored) setForm({ ...getDefaultForm(), ...(JSON.parse(stored) as Partial<CycleForm>) });
     }).catch(() => undefined);
     void refreshStatus();
   }, [refreshStatus]);
@@ -147,7 +149,10 @@ export default function HomeScreen() {
   const parsed = useMemo(() => parseCycleForm(form), [form]);
   const shizukuReady = status.isShizukuRunning && status.isShizukuPermissionGranted;
   const running = status.isRunning;
-  const activeCycle = running ? Math.max(1, Math.min(status.completedCycles + 1, status.totalCycles)) : 0;
+  const repeatsPerSeries = parsed.config?.repeatsPerSeries ?? 1;
+  const totalSeries = parsed.config?.totalSeries ?? 1;
+  const activeSeries = running ? Math.max(1, Math.min(Math.floor(status.completedCycles / repeatsPerSeries) + 1, totalSeries)) : 0;
+  const activeRepeat = running ? Math.max(1, Math.min((status.completedCycles % repeatsPerSeries) + 1, repeatsPerSeries)) : 0;
 
   const updateField = (field: keyof CycleForm) => (value: string) => persistForm((previous) => ({ ...previous, [field]: value }));
   const updateNumericField = (field: NumericField, allowNegative = false) => (value: string) => {
@@ -191,8 +196,9 @@ export default function HomeScreen() {
       const currentValue = previous[activeField].trim();
       const numeric = /^-?\d+$/.test(currentValue) ? Number(currentValue) : 0;
       let next = numeric + delta;
-      if (activeField === "pauseSeconds") next = Math.max(0, next);
-      if (activeField === "totalCycles") next = Math.max(1, Math.min(99999, next || 1));
+      if (activeField === "pauseSeconds") next = Math.max(1, next || 1);
+      if (activeField === "seriesPauseSeconds") next = Math.max(0, next);
+      if (activeField === "repeatsPerSeries" || activeField === "totalSeries") next = Math.max(1, Math.min(99999, next || 1));
       return { ...previous, [activeField]: String(next) };
     });
     if (Platform.OS !== "web") void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -202,7 +208,7 @@ export default function HomeScreen() {
     try {
       const granted = await requestShizukuPermission();
       await refreshStatus();
-      if (!granted) Alert.alert("Подтвердите Shizuku", "В Shizuku должна быть запущена служба. Затем подтвердите доступ для «Циклического времени».");
+      if (!granted) Alert.alert("Подтвердите Shizuku", "В Shizuku должна быть запущена служба. Затем подтвердите доступ для «Машины времени».");
     } catch (error) {
       Alert.alert("Shizuku недоступен", error instanceof Error ? error.message : "Установите и запустите Shizuku через беспроводную отладку.");
     }
@@ -267,7 +273,7 @@ export default function HomeScreen() {
         <ScrollView ref={scrollRef} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}>
           <View style={styles.header}>
             <Text style={[styles.headerGlyph, { color: colors.primary }]}>◷</Text>
-            <Text style={[styles.title, { color: colors.text }]}>Циклическое время</Text>
+            <Text style={[styles.title, { color: colors.text }]}>Машина времени</Text>
           </View>
 
           {!isNativeTimeControlAvailable && (
@@ -325,9 +331,23 @@ export default function HomeScreen() {
 
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>Повторение</Text>
-            <View style={styles.row}>
-              <View style={styles.rowPrimary}><Field label="Пауза, сек." value={form.pauseSeconds} onChangeText={updateNumericField("pauseSeconds")} onFocus={focusField("pauseSeconds")} keyboardType="number-pad" editable={!running} /></View>
-              <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalCycles} onChangeText={updateNumericField("totalCycles")} onFocus={focusField("totalCycles")} keyboardType="number-pad" editable={!running} /></View>
+
+            <View style={styles.repeatGroup}>
+              <Text style={[styles.repeatGroupTitle, { color: colors.muted }]}>Вложенный цикл</Text>
+              <View style={styles.row}>
+                <View style={styles.rowPrimary}><Field label="Пауза, сек." value={form.pauseSeconds} onChangeText={updateNumericField("pauseSeconds")} onFocus={focusField("pauseSeconds")} keyboardType="number-pad" editable={!running} /></View>
+                <View style={styles.rowSecondary}><Field label="Повторов" value={form.repeatsPerSeries} onChangeText={updateNumericField("repeatsPerSeries")} onFocus={focusField("repeatsPerSeries")} keyboardType="number-pad" editable={!running} /></View>
+              </View>
+            </View>
+
+            <View style={[styles.repeatDivider, { backgroundColor: colors.border }]} />
+
+            <View style={styles.repeatGroup}>
+              <Text style={[styles.repeatGroupTitle, { color: colors.muted }]}>Главный цикл</Text>
+              <View style={styles.row}>
+                <View style={styles.rowPrimary}><Field label="Особая пауза, сек." value={form.seriesPauseSeconds} onChangeText={updateNumericField("seriesPauseSeconds")} onFocus={focusField("seriesPauseSeconds")} keyboardType="number-pad" editable={!running} /></View>
+                <View style={styles.rowSecondary}><Field label="Циклов" value={form.totalSeries} onChangeText={updateNumericField("totalSeries")} onFocus={focusField("totalSeries")} keyboardType="number-pad" editable={!running} /></View>
+              </View>
             </View>
           </View>
 
@@ -350,7 +370,7 @@ export default function HomeScreen() {
 
         <View style={[styles.footer, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
           {running ? (
-            <Pressable disabled={isBusy} onPress={handleEmergencyStop} style={({ pressed }) => [styles.stopButton, { backgroundColor: colors.error }, (pressed || isBusy) && styles.pressed]}><Text style={styles.primaryButtonText}>Цикл {activeCycle} из {status.totalCycles} · остановить</Text></Pressable>
+            <Pressable disabled={isBusy} onPress={handleEmergencyStop} style={({ pressed }) => [styles.stopButton, { backgroundColor: colors.error }, (pressed || isBusy) && styles.pressed]}><Text style={styles.primaryButtonText}>Цикл {activeSeries} из {totalSeries} · повтор {activeRepeat} из {repeatsPerSeries} · остановить</Text></Pressable>
           ) : (
             <Pressable disabled={isBusy || !isNativeTimeControlAvailable} onPress={handleStart} style={({ pressed }) => [styles.primaryButton, { backgroundColor: colors.primary }, (pressed || isBusy || !isNativeTimeControlAvailable) && styles.pressed]}><Text style={styles.primaryButtonText}>Запустить цикл</Text></Pressable>
           )}
@@ -368,7 +388,8 @@ const styles = StyleSheet.create({
   automaticTimeRow: { borderTopWidth: 1, paddingTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, automaticTimeText: { flex: 1, paddingRight: 8 }, automaticTimeTitle: { fontSize: 13, fontWeight: "800" }, automaticTimeHint: { fontSize: 11, marginTop: 2 },
   card: { borderRadius: 14, padding: 12, borderWidth: 1 }, cardHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, cardTitle: { fontSize: 15, lineHeight: 20, fontWeight: "800" }, nowButton: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 }, nowButtonText: { fontSize: 12, fontWeight: "800" },
   row: { flexDirection: "row", gap: 8, marginTop: 9 }, rowPrimary: { flex: 1.35 }, rowSecondary: { flex: 1 }, tripleRow: { flexDirection: "row", gap: 7, marginTop: 9 }, fieldWrap: { flex: 1 }, fieldLabel: { fontSize: 11, fontWeight: "700", marginBottom: 4 }, input: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, height: 40, fontSize: 15, fontWeight: "700" },
+  repeatGroup: { marginTop: 8 }, repeatGroupTitle: { fontSize: 11, fontWeight: "800" }, repeatDivider: { height: 1, marginTop: 11 },
   adjusterPanel: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 6 }, adjusterLabel: { textAlign: "center", fontSize: 12, fontWeight: "800" }, adjuster: { height: 56, flexDirection: "row", borderRadius: 14, borderWidth: 1, overflow: "hidden" }, adjusterButton: { flex: 1, alignItems: "center", justifyContent: "center" }, adjusterDivider: { width: 1 }, adjusterGlyph: { fontSize: 34, lineHeight: 38, fontWeight: "700" },
   logCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" }, logToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12 }, chevron: { fontSize: 20, lineHeight: 20, fontWeight: "800" }, logActions: { flexDirection: "row", gap: 6, paddingHorizontal: 12, paddingBottom: 8 }, textAction: { paddingVertical: 5, paddingHorizontal: 7 }, textActionLabel: { fontSize: 12, fontWeight: "800" }, emptyLogText: { fontSize: 13, paddingHorizontal: 12, paddingBottom: 12 }, logItem: { marginHorizontal: 10, marginBottom: 7, borderRadius: 10, padding: 9 }, logTime: { fontSize: 10, fontWeight: "800", marginBottom: 3 }, logMessage: { fontSize: 12, lineHeight: 16 },
-  footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1 }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
+  footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1 }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { minHeight: 50, borderRadius: 14, alignItems: "center", justifyContent: "center", paddingHorizontal: 10, paddingVertical: 8 }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800", textAlign: "center" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
 });

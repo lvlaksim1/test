@@ -53,8 +53,12 @@ object TimeShizukuCycleRunner {
             return
         }
 
+        val repeats = TimeCycleStore.repeatsPerSeries(context)
+        val seriesTotal = TimeCycleStore.totalSeries(context)
+        val seriesIndex = completed / repeats + 1
+        val repeatIndex = completed % repeats + 1
         val targetMillis = TimeCycleStore.targetForCurrentCycle(context)
-        TimeCycleStore.addEvent(context, "Начата попытка ${completed + 1} из $total.")
+        TimeCycleStore.addEvent(context, "Главный цикл $seriesIndex из $seriesTotal, повтор $repeatIndex из $repeats.")
         commandInFlight = true
         TimeShizukuController.applyTime(context, targetMillis) { outcome ->
             if (expectedGeneration != generation) return@applyTime
@@ -74,10 +78,15 @@ object TimeShizukuCycleRunner {
                 return@applyTime
             }
 
-            val pauseMillis = TimeCycleStore.pauseMillis(context)
-            val nextDueElapsed = appliedElapsed + pauseMillis
-            TimeCycleStore.addEvent(context, "Пауза ${pauseMillis / 1000L} сек. до следующего изменения.")
-            scheduleAt(context, nextDueElapsed, expectedGeneration)
+            val betweenSeries = TimeCycleStore.isBetweenSeriesPause(context)
+            val pauseMillis = TimeCycleStore.pauseBeforeNextMillis(context)
+            val pauseSeconds = pauseMillis / 1000L
+            if (betweenSeries) {
+                TimeCycleStore.addEvent(context, "Пауза между главными циклами: $pauseSeconds сек.")
+            } else {
+                TimeCycleStore.addEvent(context, "Пауза между повторами: $pauseSeconds сек.")
+            }
+            scheduleAt(context, appliedElapsed + pauseMillis, expectedGeneration)
         }
     }
 
