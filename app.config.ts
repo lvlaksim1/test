@@ -25,7 +25,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.21",
+  version: "1.0.22",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -47,8 +47,8 @@ const config: ExpoConfig = {
     predictiveBackGestureEnabled: false,
     softwareKeyboardLayoutMode: "resize",
     package: env.androidPackage,
-    versionCode: 121,
-    permissions: ["POST_NOTIFICATIONS"],
+    versionCode: 122,
+    permissions: ["POST_NOTIFICATIONS", "QUERY_ALL_PACKAGES"],
   },
   web: {
     bundler: "metro",
