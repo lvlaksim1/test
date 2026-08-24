@@ -58,7 +58,7 @@ class TimeShizukuUserService : ITimeShizukuService.Stub() {
         val launch = runCommand("am start -n '$targetComponent'")
         if (launch.exitCode != 0) return "ОШИБКА: не удалось открыть приложение: ${compact(launch.describe())}"
         Thread.sleep(900L)
-        val dump = runCommand("uiautomator dump --compressed '$dumpFile'")
+        val dump = runCommand("uiautomator dump '$dumpFile'")
         val xml = if (dump.exitCode == 0) runCommand("cat '$dumpFile'") else CommandResult(-1, "", dump.describe())
         runCommand("rm -f '$dumpFile'")
         if (returnComponent.isNotBlank()) {
