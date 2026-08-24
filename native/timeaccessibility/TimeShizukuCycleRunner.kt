@@ -5,7 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 
-/** Runs the cycle in the app process. Shizuku performs the privileged time change. */
+/** Runs the cycle while the foreground service keeps the app process active. Shizuku performs the privileged time change. */
 object TimeShizukuCycleRunner {
     private val handler = Handler(Looper.getMainLooper())
     private var scheduledTask: Runnable? = null
@@ -49,6 +49,7 @@ object TimeShizukuCycleRunner {
         val total = TimeCycleStore.totalCycles(context)
         if (completed >= total) {
             TimeCycleStore.finishIfComplete(context)
+            TimeCycleForegroundService.stop(context)
             return
         }
 
@@ -61,16 +62,20 @@ object TimeShizukuCycleRunner {
             if (!TimeCycleStore.isRunning(context)) return@applyTime
             if (!outcome.isSuccess) {
                 TimeCycleStore.markAttemptFailed(context, targetMillis, "Shizuku не применил системное время. ${outcome.detail}")
+                TimeCycleForegroundService.stop(context)
                 return@applyTime
             }
 
+            val appliedElapsed = SystemClock.elapsedRealtime()
             TimeCycleStore.setAutomaticTimeEnabled(context, false)
             val continueRunning = TimeCycleStore.markAttemptSucceeded(context, targetMillis, outcome.detail)
-            if (!continueRunning) return@applyTime
+            if (!continueRunning) {
+                TimeCycleForegroundService.stop(context)
+                return@applyTime
+            }
 
-            val lastAppliedElapsed = SystemClock.elapsedRealtime()
             val pauseMillis = TimeCycleStore.pauseMillis(context)
-            val nextDueElapsed = lastAppliedElapsed + pauseMillis
+            val nextDueElapsed = appliedElapsed + pauseMillis
             TimeCycleStore.addEvent(context, "Пауза ${pauseMillis / 1000L} сек. до следующего изменения.")
             scheduleAt(context, nextDueElapsed, expectedGeneration)
         }
