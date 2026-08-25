@@ -1,68 +1,36 @@
 name: Android APK
-
 on:
   workflow_dispatch:
   push:
-    branches: [main, work-v1.0.22, work-v1.0.23, work-v1.0.24]
-    paths:
-      - "app.config.ts"
-      - "eas.json"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "plugins/**"
-      - "native/**"
-      - "app/**"
-      - "components/**"
-      - "lib/**"
-      - ".github/workflows/android-apk.yml"
-
+    branches: [main, work-v1.0.22, work-v1.0.23, work-v1.0.24, work-v1.0.25]
+    paths: ["app.config.ts","eas.json","package.json","pnpm-lock.yaml","plugins/**","native/**","app/**","components/**","lib/**",".github/workflows/android-apk.yml"]
 permissions:
   contents: write
-
 jobs:
   build-apk:
-    name: Build installable Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9.12.0
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Install Android SDK platform
-        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Generate Android project
-        run: npx expo prebuild --platform android --no-install --clean
-      - name: Build release APK
-        run: cd android && ./gradlew :app:assembleRelease --no-daemon
-      - name: Read app version
-        id: app_version
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: {version: 9.12.0}
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: pnpm}
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: "17"}
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+      - run: pnpm install --frozen-lockfile
+      - run: npx expo prebuild --platform android --no-install --clean
+      - run: cd android && ./gradlew :app:assembleRelease --no-daemon
+      - id: app_version
         shell: bash
         run: |
-          VERSION=$(grep -m1 'version: "' app.config.ts | sed -E 's/.*version: "([^"]+)".*/\1/')
+          VERSION=$(grep -o 'version:"[^"]*"' app.config.ts | head -1 | cut -d'"' -f2)
           test -n "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Prepare APK file
-        shell: bash
-        run: cp android/app/build/outputs/apk/release/app-release.apk "time-machine-${{ steps.app_version.outputs.version }}.apk"
-      - name: Publish APK release
-        uses: softprops/action-gh-release@v2
+      - run: cp android/app/build/outputs/apk/release/app-release.apk "time-machine-${{ steps.app_version.outputs.version }}.apk"
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.app_version.outputs.version }}
           name: Машина времени v${{ steps.app_version.outputs.version }}
