@@ -3,132 +3,28 @@ package __PACKAGE__.timeaccessibility
 import kotlin.math.abs
 
 class TimeShizukuUserService : ITimeShizukuService.Stub() {
-    override fun applyTime(targetMillis: Long): String {
-        val disableAutomatic = runCommand("settings put global auto_time 0")
-        val setByAlarm = runCommand("cmd alarm set-time $targetMillis")
-        val setResult = if (setByAlarm.exitCode == 0) setByAlarm else runCommand("date -s @${targetMillis / 1000L}")
-        val automaticValue = runCommand("settings get global auto_time")
-        val currentTime = runCommand("date +%s")
-        val currentMillis = currentTime.stdout.trim().toLongOrNull()?.times(1000L)
-        val verified = disableAutomatic.exitCode == 0 && setResult.exitCode == 0 && automaticValue.stdout.trim() == "0" && currentMillis != null && abs(currentMillis - targetMillis) <= 90_000L
-        return if (verified) {
-            "OK: автоматическое время выключено, системные часы установлены."
-        } else {
-            buildString {
-                append("ОШИБКА: auto=").append(compact(automaticValue.stdout))
-                append("; cmd=").append(compact(setByAlarm.describe()))
-                append("; fallback=").append(compact(setResult.describe()))
-                append("; now=").append(currentMillis ?: "?")
-            }
-        }
+    override fun applyTime(targetMillis: Long): String { val a=runCommand("settings put global auto_time 0"); val b=runCommand("cmd alarm set-time $targetMillis"); val c=if(b.exitCode==0)b else runCommand("date -s @${targetMillis/1000L}"); val d=runCommand("settings get global auto_time"); val e=runCommand("date +%s"); val now=e.stdout.trim().toLongOrNull()?.times(1000L); return if(a.exitCode==0&&c.exitCode==0&&d.stdout.trim()=="0"&&now!=null&&abs(now-targetMillis)<=90000L) "OK: автоматическое время выключено, системные часы установлены." else "ОШИБКА: auto=${compact(d.stdout)}; cmd=${compact(b.describe())}; fallback=${compact(c.describe())}; now=${now?:"?"}" }
+    override fun setAutomaticTime(enabled:Boolean):String { val expected=if(enabled)"1" else "0"; val change=runCommand("settings put global auto_time $expected"); val actual=runCommand("settings get global auto_time"); return if(change.exitCode==0&&actual.stdout.trim()==expected) "OK: автоматическая синхронизация времени ${if(enabled)"включена" else "выключена"}." else "ОШИБКА: auto=${compact(actual.stdout)}; change=${compact(change.describe())}" }
+    override fun listOpenApps():String { val activities=runCommand("dumpsys activity activities"); if(activities.exitCode!=0)return "ОШИБКА: ${compact(activities.describe())}"; val ps=runCommand("ps -A -o NAME"); val processes=if(ps.exitCode==0)ps.stdout.lineSequence().map{it.trim()}.filter{it.isNotEmpty()}.toList() else emptyList(); val packages=linkedSetOf<String>(); Regex("""u\d+\s+([A-Za-z0-9._]+)/""").let{p->activities.stdout.lineSequence().forEach{line->p.find(line)?.groupValues?.getOrNull(1)?.let{packages.add(it)}}}; return "OK:\n"+packages.joinToString("\n"){pkg->pkg+"\t"+processes.filter{it==pkg||it.startsWith("$pkg:")}.distinct().joinToString(",")} }
+    override fun inspectApp(packageName:String,returnPackage:String):String { if(!SAFE_PACKAGE.matches(packageName)||!SAFE_PACKAGE.matches(returnPackage))return "ОШИБКА: некорректное имя пакета."; val target=resolveLauncher(packageName); if(target.isBlank())return "ОШИБКА: не удалось определить запускаемый Activity выбранного приложения."; val back=resolveLauncher(returnPackage); val file="/data/local/tmp/timecycler_ui_${System.nanoTime()}.xml"; val launch=runCommand("am start -n '$target'"); if(launch.exitCode!=0)return "ОШИБКА: не удалось открыть приложение: ${compact(launch.describe())}"; Thread.sleep(900); val dump=runCommand("uiautomator dump --compressed '$file'"); val xml=if(dump.exitCode==0)runCommand("cat '$file'") else CommandResult(-1,"",dump.describe()); runCommand("rm -f '$file'"); if(back.isNotBlank()){runCommand("am start -n '$back'");Thread.sleep(250)}; return if(dump.exitCode==0&&xml.exitCode==0&&xml.stdout.contains("<hierarchy"))"OK:\n"+xml.stdout else "ОШИБКА: не удалось получить UI hierarchy: ${compact(dump.describe())}; ${compact(xml.describe())}" }
+    override fun invokeElement(packageName:String,bounds:String,returnPackage:String):String { if(!SAFE_PACKAGE.matches(packageName)||!SAFE_PACKAGE.matches(returnPackage))return "ОШИБКА: некорректное имя пакета."; val m=BOUNDS_PATTERN.matchEntire(bounds)?:return "ОШИБКА: некорректные координаты элемента."; val l=m.groupValues[1].toInt();val t=m.groupValues[2].toInt();val r=m.groupValues[3].toInt();val b=m.groupValues[4].toInt();if(r<=l||b<=t)return "ОШИБКА: пустая область элемента."; val x=l+(r-l)/2;val y=t+(b-t)/2;val target=resolveLauncher(packageName);if(target.isBlank())return "ОШИБКА: не удалось определить Activity.";val back=resolveLauncher(returnPackage);runCommand("am start -n '$target'");Thread.sleep(650);val tap=runCommand("input tap $x $y");Thread.sleep(450);if(back.isNotBlank())runCommand("am start -n '$back'");return if(tap.exitCode==0)"OK: нажатие выполнено в точке $x,$y." else "ОШИБКА: ${compact(tap.describe())}" }
+    override fun diagnosePackage(packageName:String):String {
+        if(!SAFE_PACKAGE.matches(packageName)) return "ОШИБКА: некорректное имя пакета."
+        val pidResult=runCommand("pidof '$packageName'")
+        val pid=pidResult.stdout.trim().split(Regex("\\s+")).firstOrNull{it.matches(Regex("\\d+"))}.orEmpty()
+        val tests=mutableListOf<Pair<String,String>>()
+        tests += "id" to "id"
+        tests += "whoami" to "whoami"
+        tests += "getenforce" to "getenforce"
+        tests += "process" to "ps -A -Z | grep '$packageName'"
+        tests += "run-as" to "run-as '$packageName' id"
+        if(pid.isNotBlank()) { tests += "proc-status" to "cat /proc/$pid/status"; tests += "proc-dir" to "ls -ld /proc/$pid /proc/$pid/maps /proc/$pid/mem"; tests += "proc-maps" to "head -n 20 /proc/$pid/maps" }
+        return buildString { append("OK:\npackage=").append(packageName).append("\npid=").append(if(pid.isBlank())"NOT_FOUND" else pid).append('\n'); tests.forEach{(name,cmd)-> val r=runCommand(cmd); append("\n=== ").append(name).append(" ===\ncommand: ").append(cmd).append("\nexit: ").append(r.exitCode).append("\nstdout:\n").append(r.stdout.ifBlank{"<empty>"}).append("\nstderr:\n").append(r.stderr.ifBlank{"<empty>"}).append('\n') } }
     }
-
-    override fun setAutomaticTime(enabled: Boolean): String {
-        val expected = if (enabled) "1" else "0"
-        val change = runCommand("settings put global auto_time $expected")
-        val actual = runCommand("settings get global auto_time")
-        val verified = change.exitCode == 0 && actual.stdout.trim() == expected
-        return if (verified) {
-            "OK: автоматическая синхронизация времени ${if (enabled) "включена" else "выключена"}."
-        } else {
-            "ОШИБКА: auto=${compact(actual.stdout)}; change=${compact(change.describe())}"
-        }
-    }
-
-    override fun listOpenApps(): String {
-        val activities = runCommand("dumpsys activity activities")
-        if (activities.exitCode != 0) return "ОШИБКА: ${compact(activities.describe())}"
-        val processList = runCommand("ps -A -o NAME")
-        val processes = if (processList.exitCode == 0) processList.stdout.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList() else emptyList()
-        val packages = linkedSetOf<String>()
-        val packagePattern = Regex("""u\d+\s+([A-Za-z0-9._]+)/""")
-        activities.stdout.lineSequence().forEach { line -> packagePattern.find(line)?.groupValues?.getOrNull(1)?.let { packages.add(it) } }
-        return "OK:\n" + packages.joinToString("\n") { packageName ->
-            val names = processes.filter { it == packageName || it.startsWith("$packageName:") }.distinct()
-            packageName + "\t" + names.joinToString(",")
-        }
-    }
-
-    override fun inspectApp(packageName: String, returnPackage: String): String {
-        if (!SAFE_PACKAGE.matches(packageName) || !SAFE_PACKAGE.matches(returnPackage)) return "ОШИБКА: некорректное имя пакета."
-        val targetComponent = resolveLauncher(packageName)
-        if (targetComponent.isBlank()) return "ОШИБКА: не удалось определить запускаемый Activity выбранного приложения."
-        val returnComponent = resolveLauncher(returnPackage)
-        val dumpFile = "/data/local/tmp/timecycler_ui_${System.nanoTime()}.xml"
-        val launch = runCommand("am start -n '$targetComponent'")
-        if (launch.exitCode != 0) return "ОШИБКА: не удалось открыть приложение: ${compact(launch.describe())}"
-        Thread.sleep(900L)
-        val dump = runCommand("uiautomator dump --compressed '$dumpFile'")
-        val xml = if (dump.exitCode == 0) runCommand("cat '$dumpFile'") else CommandResult(-1, "", dump.describe())
-        runCommand("rm -f '$dumpFile'")
-        if (returnComponent.isNotBlank()) {
-            runCommand("am start -n '$returnComponent'")
-            Thread.sleep(250L)
-        }
-        if (dump.exitCode != 0 || xml.exitCode != 0 || !xml.stdout.contains("<hierarchy")) {
-            return "ОШИБКА: не удалось получить UI hierarchy: ${compact(dump.describe())}; ${compact(xml.describe())}"
-        }
-        return "OK:\n" + xml.stdout
-    }
-
-    override fun invokeElement(packageName: String, bounds: String, returnPackage: String): String {
-        if (!SAFE_PACKAGE.matches(packageName) || !SAFE_PACKAGE.matches(returnPackage)) return "ОШИБКА: некорректное имя пакета."
-        val match = BOUNDS_PATTERN.matchEntire(bounds) ?: return "ОШИБКА: некорректные координаты элемента."
-        val left = match.groupValues[1].toIntOrNull() ?: return "ОШИБКА: некорректные координаты элемента."
-        val top = match.groupValues[2].toIntOrNull() ?: return "ОШИБКА: некорректные координаты элемента."
-        val right = match.groupValues[3].toIntOrNull() ?: return "ОШИБКА: некорректные координаты элемента."
-        val bottom = match.groupValues[4].toIntOrNull() ?: return "ОШИБКА: некорректные координаты элемента."
-        if (right <= left || bottom <= top) return "ОШИБКА: пустая область элемента."
-        val x = left + (right - left) / 2
-        val y = top + (bottom - top) / 2
-        if (x !in 0..10000 || y !in 0..10000) return "ОШИБКА: координаты элемента выходят за допустимые пределы."
-
-        val targetComponent = resolveLauncher(packageName)
-        if (targetComponent.isBlank()) return "ОШИБКА: не удалось определить запускаемый Activity выбранного приложения."
-        val returnComponent = resolveLauncher(returnPackage)
-        val launch = runCommand("am start -n '$targetComponent'")
-        if (launch.exitCode != 0) return "ОШИБКА: не удалось открыть приложение: ${compact(launch.describe())}"
-        Thread.sleep(650L)
-        val tap = runCommand("input tap $x $y")
-        Thread.sleep(450L)
-        if (returnComponent.isNotBlank()) {
-            runCommand("am start -n '$returnComponent'")
-            Thread.sleep(220L)
-        }
-        return if (tap.exitCode == 0) {
-            "OK: нажатие выполнено в точке $x,$y."
-        } else {
-            "ОШИБКА: не удалось выполнить нажатие: ${compact(tap.describe())}"
-        }
-    }
-
-    override fun destroy() {
-        // Недаэмонская служба Shizuku завершается вместе с клиентом.
-    }
-
-    private fun resolveLauncher(packageName: String): String {
-        val result = runCommand("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p '$packageName'")
-        if (result.exitCode != 0) return ""
-        return result.stdout.lineSequence().map { it.trim() }.lastOrNull { it.contains('/') } ?: ""
-    }
-
-    private fun runCommand(command: String): CommandResult {
-        return runCatching {
-            val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
-            val stdout = process.inputStream.bufferedReader().use { it.readText() }
-            val stderr = process.errorStream.bufferedReader().use { it.readText() }
-            CommandResult(process.waitFor(), stdout, stderr)
-        }.getOrElse { CommandResult(-1, "", it.message.orEmpty()) }
-    }
-
-    private fun compact(value: String): String = value.replace(Regex("\\s+"), " ").trim().take(220)
-
-    private data class CommandResult(val exitCode: Int, val stdout: String, val stderr: String) {
-        fun describe(): String = "exit=$exitCode out=${stdout.trim()} err=${stderr.trim()}"
-    }
-
-    companion object {
-        private val SAFE_PACKAGE = Regex("^[A-Za-z0-9._]+$")
-        private val BOUNDS_PATTERN = Regex("^\\[(\\d+),(\\d+)]\\[(\\d+),(\\d+)]$")
-    }
+    override fun destroy() {}
+    private fun resolveLauncher(packageName:String):String { val r=runCommand("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p '$packageName'");return if(r.exitCode==0)r.stdout.lineSequence().map{it.trim()}.lastOrNull{it.contains('/')}?:"" else "" }
+    private fun runCommand(command:String):CommandResult=runCatching{val p=Runtime.getRuntime().exec(arrayOf("sh","-c",command));val out=p.inputStream.bufferedReader().use{it.readText()};val err=p.errorStream.bufferedReader().use{it.readText()};CommandResult(p.waitFor(),out,err)}.getOrElse{CommandResult(-1,"",it.message.orEmpty())}
+    private fun compact(v:String)=v.replace(Regex("\\s+")," ").trim().take(220)
+    private data class CommandResult(val exitCode:Int,val stdout:String,val stderr:String){fun describe()="exit=$exitCode out=${stdout.trim()} err=${stderr.trim()}"}
+    companion object { private val SAFE_PACKAGE=Regex("^[A-Za-z0-9._]+$");private val BOUNDS_PATTERN=Regex("^\\[(\\d+),(\\d+)]\\[(\\d+),(\\d+)]$") }
 }
