@@ -88,7 +88,7 @@ function withTimeShizuku(config) {
     const aidlRoot = path.join(projectRoot, "app", "src", "main", "aidl", ...packageName.split("."), "timeaccessibility");
     fs.mkdirSync(kotlinRoot, { recursive: true });
     fs.mkdirSync(aidlRoot, { recursive: true });
-    for (const fileName of ["TimeControlModule.kt", "TimeControlPackage.kt", "TimeCycleStore.kt", "TimeShizukuController.kt", "TimeShizukuCycleRunner.kt", "TimeShizukuUserService.kt", "TimeCycleForegroundService.kt"]) {
+    for (const fileName of ["TimeControlModule.kt", "TimeControlPackage.kt", "TimeCycleStore.kt", "TimeShizukuController.kt", "TimeShizukuCycleRunner.kt", "TimeShizukuUserService.kt", "TimeCycleForegroundService.kt", "UnityRuntimeBridge.kt"]) {
       const source = fs.readFileSync(path.join(sourceRoot, fileName), "utf8");
       fs.writeFileSync(path.join(kotlinRoot, fileName), source.replaceAll("__PACKAGE__", packageName));
     }
