@@ -1,0 +1,19 @@
+name: Cleanup v1.0.22 release
+
+on:
+  push:
+    branches: [work-v1.0.22]
+    paths:
+      - ".github/workflows/cleanup-v1.0.22.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove obsolete wrong APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete-asset v1.0.22 cyclic-time-1.0.22.apk --yes --repo "$GITHUB_REPOSITORY"
