@@ -23,7 +23,7 @@ data class ShizukuCommandOutcome(
 object TimeShizukuController {
     private const val REQUEST_CODE = 7201
     private const val SERVICE_TAG = "time-cycler-direct-time-v2"
-    private const val SERVICE_VERSION = 3
+    private const val SERVICE_VERSION = 6
     private const val SERVICE_PROCESS_SUFFIX = "timecycler"
 
     private val lock = Any()
@@ -35,9 +35,7 @@ object TimeShizukuController {
 
     fun state(): ShizukuState {
         val running = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
-        val granted = running && runCatching {
-            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-        }.getOrDefault(false)
+        val granted = running && runCatching { Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED }.getOrDefault(false)
         return ShizukuState(running, granted)
     }
 
@@ -58,6 +56,18 @@ object TimeShizukuController {
 
     fun setAutomaticTime(context: Context, enabled: Boolean, callback: (ShizukuCommandOutcome) -> Unit) {
         execute(context, { service -> service.setAutomaticTime(enabled) }, callback)
+    }
+
+    fun listOpenApps(context: Context, callback: (ShizukuCommandOutcome) -> Unit) {
+        execute(context, { service -> service.listOpenApps() }, callback)
+    }
+
+    fun inspectApp(context: Context, packageName: String, callback: (ShizukuCommandOutcome) -> Unit) {
+        execute(context, { service -> service.inspectApp(packageName, context.packageName) }, callback)
+    }
+
+    fun invokeElement(context: Context, packageName: String, bounds: String, callback: (ShizukuCommandOutcome) -> Unit) {
+        execute(context, { service -> service.invokeElement(packageName, bounds, context.packageName) }, callback)
     }
 
     private fun execute(
@@ -107,9 +117,7 @@ object TimeShizukuController {
                 isBinding = false
                 pendingRequest.also { pendingRequest = null }
             }
-            request?.second?.let { callback ->
-                deliver(callback, ShizukuCommandOutcome(false, "Не удалось подключить Shizuku: ${failure.message.orEmpty()}"))
-            }
+            request?.second?.let { callback -> deliver(callback, ShizukuCommandOutcome(false, "Не удалось подключить Shizuku: ${failure.message.orEmpty()}")) }
         }
     }
 
@@ -138,8 +146,7 @@ object TimeShizukuController {
         callback: (ShizukuCommandOutcome) -> Unit,
     ) {
         executor.execute {
-            val detail = runCatching { command(service) }
-                .getOrElse { "ОШИБКА: ${it.message.orEmpty()}" }
+            val detail = runCatching { command(service) }.getOrElse { "ОШИБКА: ${it.message.orEmpty()}" }
             deliver(callback, ShizukuCommandOutcome(detail.startsWith("OK:"), detail))
         }
     }
