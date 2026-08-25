@@ -148,6 +148,36 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
     }
 
     @ReactMethod
+    fun inspectUnityRuntime(packageName: String, promise: Promise) {
+        if (!PACKAGE_PATTERN.matches(packageName)) {
+            promise.reject("INVALID_PACKAGE", "Некорректное имя пакета приложения.")
+            return
+        }
+        Thread {
+            val result = UnityRuntimeBridge.snapshot(packageName)
+            context.runOnUiQueueThread { promise.resolve(jsonToWritableMap(result)) }
+        }.start()
+    }
+
+    @ReactMethod
+    fun invokeUnityRuntimeButton(packageName: String, buttonId: String, promise: Promise) {
+        if (!PACKAGE_PATTERN.matches(packageName) || !BUTTON_ID_PATTERN.matches(buttonId)) {
+            promise.reject("INVALID_UNITY_BUTTON", "Некорректный пакет или идентификатор Unity-кнопки.")
+            return
+        }
+        Thread {
+            val result = UnityRuntimeBridge.invoke(packageName, buttonId)
+            context.runOnUiQueueThread {
+                if (result.optBoolean("ok", false)) {
+                    promise.resolve(true)
+                } else {
+                    promise.reject("UNITY_RUNTIME_INVOKE_FAILED", result.optString("message", "Runtime-агент не выполнил действие."))
+                }
+            }
+        }.start()
+    }
+
+    @ReactMethod
     fun startCycle(settings: ReadableMap, promise: Promise) {
         val shizuku = TimeShizukuController.state()
         if (!shizuku.isPermissionGranted) {
@@ -273,5 +303,6 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
     companion object {
         private val PACKAGE_PATTERN = Regex("^[A-Za-z0-9._]+$")
         private val BOUNDS_PATTERN = Regex("^\\[\\d+,\\d+]\\[\\d+,\\d+]$")
+        private val BUTTON_ID_PATTERN = Regex("^[A-Za-z0-9_.:/-]{1,160}$")
     }
 }
