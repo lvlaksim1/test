@@ -1,8 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { useColors } from "@/hooks/use-colors";
-import { invokeAppElement, type OpenAppInfo, type UiElementInfo } from "@/lib/time-control";
+import {
+  inspectUnityRuntime,
+  invokeAppElement,
+  invokeUnityRuntimeButton,
+  type OpenAppInfo,
+  type UiElementInfo,
+  type UnityRuntimeButton,
+  type UnityRuntimeSnapshot,
+} from "@/lib/time-control";
 
 type Props = {
   visible: boolean;
@@ -48,6 +56,10 @@ function buttonCaption(element: UiElementInfo): string {
   return attribute(element, "text") || attribute(element, "content-desc") || attribute(element, "resource-id").split("/").pop() || element.name || "Кнопка";
 }
 
+function unityButtonCaption(button: UnityRuntimeButton): string {
+  return button.text?.trim() || button.name?.trim() || button.id;
+}
+
 const columns: Column[] = [
   { key: "number", title: "№", width: 48, value: (item) => String(item.sequence + 1) },
   { key: "depth", title: "Глубина", width: 72, value: (item) => String(item.depth) },
@@ -67,13 +79,52 @@ export function UiInspectionModal({ visible, app, elements, loading, error, onCl
   const colors = useColors();
   const [invokingKey, setInvokingKey] = useState<string | null>(null);
   const [invokeError, setInvokeError] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<UnityRuntimeSnapshot | null>(null);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const [runtimeInvoking, setRuntimeInvoking] = useState<string | null>(null);
+
   const clickableElements = useMemo(() => elements.filter(isClickable), [elements]);
   const unitySurfaceDetected = useMemo(() => elements.some((element) => {
     const className = attribute(element, "class").toLowerCase();
     const name = element.name.toLowerCase();
     return className.includes("surfaceview") || className.includes("gameview") || name.includes("surfaceview") || name.includes("gameview");
   }), [elements]);
-  const screenKind = unitySurfaceDetected ? "Unity / SurfaceView" : (elements[0] ? attribute(elements[0], "class") || elements[0].name : "—");
+  const screenKind = runtime?.connected && runtime.screen
+    ? runtime.screen
+    : unitySurfaceDetected
+      ? "Unity / SurfaceView"
+      : (elements[0] ? attribute(elements[0], "class") || elements[0].name : "—");
+
+  const refreshRuntime = async () => {
+    if (!app || !unitySurfaceDetected) return;
+    setRuntimeLoading(true);
+    try {
+      setRuntime(await inspectUnityRuntime(app.packageName));
+    } catch (failure) {
+      setRuntime({
+        ok: false,
+        connected: false,
+        status: "bridge_error",
+        screen: null,
+        buttons: [],
+        message: failure instanceof Error ? failure.message : "Не удалось проверить Unity Runtime Agent.",
+      });
+    } finally {
+      setRuntimeLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!visible) return;
+    setInvokeError(null);
+    setRuntime(null);
+    setRuntimeInvoking(null);
+  }, [visible, app?.packageName]);
+
+  useEffect(() => {
+    if (!visible || !app || loading || !unitySurfaceDetected) return;
+    void refreshRuntime();
+  }, [visible, app?.packageName, loading, unitySurfaceDetected]);
 
   const invoke = async (element: UiElementInfo) => {
     if (!app || invokingKey) return;
@@ -90,6 +141,21 @@ export function UiInspectionModal({ visible, app, elements, loading, error, onCl
     }
   };
 
+  const invokeRuntime = async (button: UnityRuntimeButton) => {
+    if (!app || runtimeInvoking || button.interactable === false || button.active === false) return;
+    setRuntimeInvoking(button.id);
+    setInvokeError(null);
+    try {
+      await invokeUnityRuntimeButton(app.packageName, button.id);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      await refreshRuntime();
+    } catch (failure) {
+      setInvokeError(failure instanceof Error ? failure.message : "Runtime-агент не выполнил Unity-действие.");
+    } finally {
+      setRuntimeInvoking(null);
+    }
+  };
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <View style={[styles.root, { backgroundColor: colors.background }]}>
@@ -99,7 +165,7 @@ export function UiInspectionModal({ visible, app, elements, loading, error, onCl
             <Text style={[styles.subtitle, { color: colors.muted }]} numberOfLines={2}>
               {app ? `${app.label} (${app.processNames.join(", ") || app.packageName})` : ""}
             </Text>
-            {!loading && !error && <Text style={[styles.count, { color: colors.muted }]}>Найдено элементов: {elements.length}; кнопок: {clickableElements.length}</Text>}
+            {!loading && !error && <Text style={[styles.count, { color: colors.muted }]}>Android-элементов: {elements.length}; Android-кнопок: {clickableElements.length}</Text>}
           </View>
           <Pressable onPress={onClose} style={({ pressed }) => [styles.closeButton, { borderColor: colors.border }, pressed && styles.pressed]}>
             <Text style={[styles.closeText, { color: colors.primary }]}>Закрыть</Text>
@@ -115,31 +181,80 @@ export function UiInspectionModal({ visible, app, elements, loading, error, onCl
             <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Text style={[styles.summaryTitle, { color: colors.text }]}>Текущий экран</Text>
               <Text style={[styles.summaryValue, { color: colors.muted }]}>{screenKind}</Text>
-              {unitySurfaceDetected && (
-                <Text style={[styles.unityHint, { color: colors.warning }]}>Обнаружен Unity SurfaceView. Android UIAutomation видит только экспортированные Unity элементы; внутренние BTN_* сюда не добавляются искусственно.</Text>
-              )}
             </View>
 
-            <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <Text style={[styles.summaryTitle, { color: colors.text }]}>Кнопки текущего экрана</Text>
-              {clickableElements.length ? (
-                <View style={styles.buttonList}>
-                  {clickableElements.map((element) => {
-                    const bounds = attribute(element, "bounds");
-                    const key = `${element.sequence}-${bounds}`;
-                    return (
-                      <Pressable key={key} disabled={Boolean(invokingKey)} onPress={() => void invoke(element)} style={({ pressed }) => [styles.mirrorButton, { borderColor: colors.primary, backgroundColor: colors.background }, (pressed || invokingKey === key) && styles.pressed]}>
-                        <Text style={[styles.mirrorButtonText, { color: colors.primary }]}>{invokingKey === key ? "Выполнение…" : buttonCaption(element)}</Text>
-                        <Text style={[styles.mirrorButtonMeta, { color: colors.muted }]}>{bounds}</Text>
-                      </Pressable>
-                    );
-                  })}
+            {unitySurfaceDetected && (
+              <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <View style={styles.runtimeHeader}>
+                  <Text style={[styles.summaryTitle, { color: colors.text }]}>Unity Runtime Inspector</Text>
+                  <Pressable disabled={runtimeLoading} onPress={() => void refreshRuntime()} style={({ pressed }) => [styles.refreshButton, { borderColor: colors.border }, pressed && styles.pressed]}>
+                    <Text style={[styles.refreshText, { color: colors.primary }]}>{runtimeLoading ? "Проверка…" : "Обновить"}</Text>
+                  </Pressable>
                 </View>
-              ) : (
-                <Text style={[styles.emptyButtons, { color: colors.muted }]}>{unitySurfaceDetected ? "Unity не экспортировал кликабельные кнопки в Android UI hierarchy." : "Кликабельные элементы на текущем экране не найдены."}</Text>
-              )}
-              {invokeError && <Text style={[styles.invokeError, { color: colors.error }]}>{invokeError}</Text>}
-            </View>
+
+                {runtimeLoading && !runtime ? (
+                  <Text style={[styles.runtimeMessage, { color: colors.muted }]}>Поиск runtime-агента…</Text>
+                ) : runtime?.connected ? (
+                  <>
+                    <Text style={[styles.runtimeStatus, { color: colors.primary }]}>Агент подключён{runtime.agentVersion ? ` · ${runtime.agentVersion}` : ""}</Text>
+                    <Text style={[styles.runtimeScreen, { color: colors.text }]}>UIView: {runtime.screen || "не определён"}</Text>
+                    {runtime.buttons.length ? (
+                      <View style={styles.buttonList}>
+                        {runtime.buttons.map((button) => {
+                          const disabled = button.active === false || button.interactable === false || Boolean(runtimeInvoking);
+                          return (
+                            <Pressable
+                              key={button.id}
+                              disabled={disabled}
+                              onPress={() => void invokeRuntime(button)}
+                              style={({ pressed }) => [
+                                styles.mirrorButton,
+                                { borderColor: disabled ? colors.border : colors.primary, backgroundColor: colors.background },
+                                (pressed || runtimeInvoking === button.id) && styles.pressed,
+                              ]}
+                            >
+                              <Text style={[styles.mirrorButtonText, { color: disabled ? colors.muted : colors.primary }]}>{runtimeInvoking === button.id ? "Выполнение…" : unityButtonCaption(button)}</Text>
+                              <Text style={[styles.mirrorButtonMeta, { color: colors.muted }]}>{button.id} · active={String(button.active !== false)} · interactable={String(button.interactable !== false)}</Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    ) : (
+                      <Text style={[styles.runtimeMessage, { color: colors.muted }]}>На текущем UIView активные Unity-кнопки не найдены.</Text>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Text style={[styles.runtimeStatus, { color: colors.warning }]}>Runtime-агент не подключён</Text>
+                    <Text style={[styles.runtimeMessage, { color: colors.muted }]}>{runtime?.message || "Магазинная сборка Android изолирует внутренние Unity-объекты. V23 не подменяет их визуальным распознаванием: BTN_* появятся здесь только при подключении разрешённого runtime-агента в тестовом/отладочном окружении."}</Text>
+                  </>
+                )}
+              </View>
+            )}
+
+            {!unitySurfaceDetected && (
+              <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Text style={[styles.summaryTitle, { color: colors.text }]}>Android-кнопки текущего экрана</Text>
+                {clickableElements.length ? (
+                  <View style={styles.buttonList}>
+                    {clickableElements.map((element) => {
+                      const bounds = attribute(element, "bounds");
+                      const key = `${element.sequence}-${bounds}`;
+                      return (
+                        <Pressable key={key} disabled={Boolean(invokingKey)} onPress={() => void invoke(element)} style={({ pressed }) => [styles.mirrorButton, { borderColor: colors.primary, backgroundColor: colors.background }, (pressed || invokingKey === key) && styles.pressed]}>
+                          <Text style={[styles.mirrorButtonText, { color: colors.primary }]}>{invokingKey === key ? "Выполнение…" : buttonCaption(element)}</Text>
+                          <Text style={[styles.mirrorButtonMeta, { color: colors.muted }]}>{bounds}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <Text style={[styles.emptyButtons, { color: colors.muted }]}>Кликабельные Android-элементы на текущем экране не найдены.</Text>
+                )}
+              </View>
+            )}
+
+            {invokeError && <Text style={[styles.invokeError, { color: colors.error }]}>{invokeError}</Text>}
 
             <ScrollView horizontal showsHorizontalScrollIndicator>
               <View style={[styles.table, { borderColor: colors.border }]}>
@@ -184,13 +299,18 @@ const styles = StyleSheet.create({
   summaryCard: { borderWidth: 1, borderRadius: 10, padding: 12 },
   summaryTitle: { fontSize: 14, fontWeight: "800" },
   summaryValue: { fontSize: 12, marginTop: 4 },
-  unityHint: { fontSize: 12, lineHeight: 17, marginTop: 8 },
+  runtimeHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  refreshButton: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5 },
+  refreshText: { fontSize: 11, fontWeight: "800" },
+  runtimeStatus: { fontSize: 12, fontWeight: "800", marginTop: 9 },
+  runtimeScreen: { fontSize: 13, fontWeight: "700", marginTop: 7 },
+  runtimeMessage: { fontSize: 12, lineHeight: 17, marginTop: 7 },
   buttonList: { marginTop: 10, gap: 8 },
   mirrorButton: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 10 },
   mirrorButtonText: { fontSize: 14, fontWeight: "800" },
   mirrorButtonMeta: { fontSize: 10, marginTop: 3 },
   emptyButtons: { fontSize: 12, lineHeight: 17, marginTop: 8 },
-  invokeError: { fontSize: 12, lineHeight: 17, marginTop: 8 },
+  invokeError: { fontSize: 12, lineHeight: 17, marginHorizontal: 2 },
   table: { borderWidth: 1, borderRadius: 8, overflow: "hidden" },
   tableRow: { flexDirection: "row", borderBottomWidth: 1, alignItems: "stretch" },
   headerRow: { minHeight: 46 },
