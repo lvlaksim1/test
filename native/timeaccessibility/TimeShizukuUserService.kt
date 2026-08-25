@@ -58,7 +58,7 @@ class TimeShizukuUserService : ITimeShizukuService.Stub() {
         val launch = runCommand("am start -n '$targetComponent'")
         if (launch.exitCode != 0) return "ОШИБКА: не удалось открыть приложение: ${compact(launch.describe())}"
         Thread.sleep(900L)
-        val dump = runCommand("uiautomator dump '$dumpFile'")
+        val dump = runCommand("uiautomator dump --compressed '$dumpFile'")
         val xml = if (dump.exitCode == 0) runCommand("cat '$dumpFile'") else CommandResult(-1, "", dump.describe())
         runCommand("rm -f '$dumpFile'")
         if (returnComponent.isNotBlank()) {
@@ -69,6 +69,37 @@ class TimeShizukuUserService : ITimeShizukuService.Stub() {
             return "ОШИБКА: не удалось получить UI hierarchy: ${compact(dump.describe())}; ${compact(xml.describe())}"
         }
         return "OK:\n" + xml.stdout
+    }
+
+    override fun invokeElement(packageName: String, bounds: String, returnPackage: String): String {
+        if (!SAFE_PACKAGE.matches(packageName) || !SAFE_PACKAGE.matches(returnPackage)) return "ОШИБКА: некорректное имя пакета."
+        val match = BOUNDS_PATTERN.matchEntire(bounds) ?: return "ОШИБКА: некорректные координаты элемента."
+        val left = match.groupValues[1].toIntOrNull() ?: return "ОШИБКА: некорректные координаты элемента."
+        val top = match.groupValues[2].toIntOrNull() ?: return "ОШИБКА: некорректные координаты элемента."
+        val right = match.groupValues[3].toIntOrNull() ?: return "ОШИБКА: некорректные координаты элемента."
+        val bottom = match.groupValues[4].toIntOrNull() ?: return "ОШИБКА: некорректные координаты элемента."
+        if (right <= left || bottom <= top) return "ОШИБКА: пустая область элемента."
+        val x = left + (right - left) / 2
+        val y = top + (bottom - top) / 2
+        if (x !in 0..10000 || y !in 0..10000) return "ОШИБКА: координаты элемента выходят за допустимые пределы."
+
+        val targetComponent = resolveLauncher(packageName)
+        if (targetComponent.isBlank()) return "ОШИБКА: не удалось определить запускаемый Activity выбранного приложения."
+        val returnComponent = resolveLauncher(returnPackage)
+        val launch = runCommand("am start -n '$targetComponent'")
+        if (launch.exitCode != 0) return "ОШИБКА: не удалось открыть приложение: ${compact(launch.describe())}"
+        Thread.sleep(650L)
+        val tap = runCommand("input tap $x $y")
+        Thread.sleep(450L)
+        if (returnComponent.isNotBlank()) {
+            runCommand("am start -n '$returnComponent'")
+            Thread.sleep(220L)
+        }
+        return if (tap.exitCode == 0) {
+            "OK: нажатие выполнено в точке $x,$y."
+        } else {
+            "ОШИБКА: не удалось выполнить нажатие: ${compact(tap.describe())}"
+        }
     }
 
     override fun destroy() {
@@ -98,5 +129,6 @@ class TimeShizukuUserService : ITimeShizukuService.Stub() {
 
     companion object {
         private val SAFE_PACKAGE = Regex("^[A-Za-z0-9._]+$")
+        private val BOUNDS_PATTERN = Regex("^\\[(\\d+),(\\d+)]\\[(\\d+),(\\d+)]$")
     }
 }

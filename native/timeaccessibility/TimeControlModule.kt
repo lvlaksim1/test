@@ -132,6 +132,22 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
     }
 
     @ReactMethod
+    fun invokeElement(packageName: String, bounds: String, promise: Promise) {
+        if (!PACKAGE_PATTERN.matches(packageName) || !BOUNDS_PATTERN.matches(bounds)) {
+            promise.reject("INVALID_ELEMENT", "Некорректный пакет или координаты элемента.")
+            return
+        }
+        val shizuku = TimeShizukuController.state()
+        if (!shizuku.isPermissionGranted) {
+            promise.reject("SHIZUKU_PERMISSION_REQUIRED", "Сначала запустите Shizuku и выдайте доступ приложению.")
+            return
+        }
+        TimeShizukuController.invokeElement(context, packageName, bounds) { outcome ->
+            if (outcome.isSuccess) promise.resolve(true) else promise.reject("UI_INVOKE_FAILED", outcome.detail)
+        }
+    }
+
+    @ReactMethod
     fun startCycle(settings: ReadableMap, promise: Promise) {
         val shizuku = TimeShizukuController.state()
         if (!shizuku.isPermissionGranted) {
@@ -249,5 +265,6 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
 
     companion object {
         private val PACKAGE_PATTERN = Regex("^[A-Za-z0-9._]+$")
+        private val BOUNDS_PATTERN = Regex("^\\[\\d+,\\d+]\\[\\d+,\\d+]$")
     }
 }

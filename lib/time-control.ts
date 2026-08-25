@@ -30,6 +30,7 @@ type NativeTimeControl = {
   applyTime: (targetMillis: number) => Promise<TimeControlStatus>;
   getOpenApps: () => Promise<OpenAppInfo[]>;
   inspectApp: (packageName: string) => Promise<UiElementInfo[]>;
+  invokeElement: (packageName: string, bounds: string) => Promise<boolean>;
   startCycle: (config: CycleConfig) => Promise<TimeControlStatus>;
   stopCycle: () => Promise<TimeControlStatus>;
   clearEvents: () => Promise<boolean>;
@@ -59,6 +60,10 @@ export async function getOpenApps(): Promise<OpenAppInfo[]> {
 export async function inspectAppScreen(packageName: string): Promise<UiElementInfo[]> {
   if (!nativeModule) throw new Error("Просмотр элементов экрана доступен только в собранном Android APK.");
   return nativeModule.inspectApp(packageName);
+}
+export async function invokeAppElement(packageName: string, bounds: string): Promise<boolean> {
+  if (!nativeModule) throw new Error("Дублирование кнопок доступно только в собранном Android APK.");
+  return nativeModule.invokeElement(packageName, bounds);
 }
 export async function startTimeCycle(config: CycleConfig): Promise<TimeControlStatus> {
   if (!nativeModule) throw new Error("Изменение времени доступно только в собранном Android APK.");

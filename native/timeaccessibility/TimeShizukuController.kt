@@ -23,7 +23,7 @@ data class ShizukuCommandOutcome(
 object TimeShizukuController {
     private const val REQUEST_CODE = 7201
     private const val SERVICE_TAG = "time-cycler-direct-time-v2"
-    private const val SERVICE_VERSION = 5
+    private const val SERVICE_VERSION = 6
     private const val SERVICE_PROCESS_SUFFIX = "timecycler"
 
     private val lock = Any()
@@ -64,6 +64,10 @@ object TimeShizukuController {
 
     fun inspectApp(context: Context, packageName: String, callback: (ShizukuCommandOutcome) -> Unit) {
         execute(context, { service -> service.inspectApp(packageName, context.packageName) }, callback)
+    }
+
+    fun invokeElement(context: Context, packageName: String, bounds: String, callback: (ShizukuCommandOutcome) -> Unit) {
+        execute(context, { service -> service.invokeElement(packageName, bounds, context.packageName) }, callback)
     }
 
     private fun execute(
