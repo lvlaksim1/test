@@ -11,32 +11,20 @@ class TimeShizukuUserService : ITimeShizukuService.Stub() {
     override fun diagnosePackage(packageName:String):String {
         if(!SAFE_PACKAGE.matches(packageName)) return "ОШИБКА: некорректное имя пакета."
         val pid=runCommand("pidof '$packageName'").stdout.trim().split(Regex("\\s+")).firstOrNull{it.matches(Regex("\\d+"))}.orEmpty()
+        val root="/sdcard/Android/data/$packageName/files"
         val tests=mutableListOf<Pair<String,String>>()
-        tests += "identity" to "id; getenforce"
-        tests += "package-flags" to "dumpsys package '$packageName' | grep -iE 'debuggable|profileable|flags|privateFlags' | head -n 120"
-        tests += "exported-components" to "dumpsys package '$packageName' | grep -E '$packageName/|authority=|authorities=|exported=|permission=' | head -n 400"
-        tests += "running-services" to "dumpsys activity services '$packageName' | head -n 300"
-        tests += "providers" to "dumpsys activity providers '$packageName' | head -n 300"
-        tests += "broadcasts" to "dumpsys activity broadcasts | grep -A 8 -B 2 '$packageName' | head -n 300"
-        tests += "named-binder-services" to "service list | grep -iE 'supercent|weaponrpg' | head -n 100"
-        tests += "external-files" to "find /sdcard/Android/data/'$packageName' -maxdepth 3 -type f 2>/dev/null | head -n 200"
+        tests += "state-files" to "find '$root' -maxdepth 4 -type f -printf '%T@|%s|%p\\n' 2>/dev/null | sort -nr | head -n 400"
+        tests += "decoded-state-names" to "find '$root' -maxdepth 4 -type f 2>/dev/null | head -n 400 | while IFS= read -r f; do b=\$(basename \"\$f\"); d=\$(printf '%s' \"\$b\" | base64 -d 2>/dev/null | tr -d '\\000' | head -c 160); printf '%s|%s\\n' \"\$b\" \"\$d\"; done"
+        tests += "state-file-samples" to "find '$root' -maxdepth 4 -type f -size -262145c 2>/dev/null | head -n 80 | while IFS= read -r f; do echo ===\$f===; wc -c < \"\$f\"; od -An -tx1 -N64 \"\$f\" 2>/dev/null | head -n 2; strings -n 5 \"\$f\" 2>/dev/null | head -n 12; done"
         if(pid.isNotBlank()) {
-            tests += "process-context" to "ps -A -Z | grep '$packageName'"
-            tests += "proc-net-tcp" to "head -n 60 /proc/$pid/net/tcp 2>&1"
-            tests += "proc-net-tcp6" to "head -n 60 /proc/$pid/net/tcp6 2>&1"
-            tests += "proc-net-unix" to "head -n 100 /proc/$pid/net/unix 2>&1"
-            tests += "localhost-listeners" to "ss -lntp 2>&1 | grep -E '127\\.0\\.0\\.1|\\[::1\\]|pid=$pid|$packageName' | head -n 200"
-            tests += "unix-listeners" to "ss -lxnp 2>&1 | grep -E 'pid=$pid|$packageName|supercent|weaponrpg' | head -n 200"
-            tests += "logcat-access" to "logcat -d --pid=$pid -t 40 -v tag 2>/dev/null | sed -E 's/:.*$//' | sort -u | head -n 80"
+            tests += "game-logcat-full" to "logcat -d --pid=$pid -t 1200 -v threadtime 2>/dev/null | tail -n 1200"
+            tests += "game-logcat-semantic" to "logcat -d --pid=$pid -t 3000 -v threadtime 2>/dev/null | grep -iE 'ui|view|menu|button|btn_|gacha|weapon|lobby|shop|screen|open|close|click|quest|upgrade|equip' | tail -n 1000"
+            tests += "dynamic-datachanged" to "dumpsys activity broadcasts | grep -A 16 -B 5 -E '_dataChanged|$packageName' | head -n 600"
         }
         return buildString {
-            append("OK:\nV26 Runtime Surface Audit\npackage=").append(packageName).append("\npid=").append(if(pid.isBlank())"NOT_FOUND" else pid).append('\n')
-            tests.forEach { (name,cmd) ->
-                val r=runCommand(cmd)
-                append("\n=== ").append(name).append(" ===\ncommand: ").append(cmd).append("\nexit: ").append(r.exitCode)
-                append("\nstdout:\n").append(r.stdout.ifBlank{"<empty>"}.take(16000))
-                append("\nstderr:\n").append(r.stderr.ifBlank{"<empty>"}.take(4000)).append('\n')
-            }
+            append("OK:\nV27 XP Hero State Probe\npackage=").append(packageName).append("\npid=").append(if(pid.isBlank())"NOT_FOUND" else pid).append('\n')
+            append("\nИнструкция: повторите диагностику на двух разных экранах игры. Сравнивайте mtime/size state-files и game-logcat-semantic.\n")
+            tests.forEach { (name,cmd) -> val r=runCommand(cmd); append("\n=== ").append(name).append(" ===\ncommand: ").append(cmd).append("\nexit: ").append(r.exitCode); append("\nstdout:\n").append(r.stdout.ifBlank{"<empty>"}.take(30000)); append("\nstderr:\n").append(r.stderr.ifBlank{"<empty>"}.take(5000)).append('\n') }
         }
     }
     override fun destroy() {}
