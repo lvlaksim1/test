@@ -2,7 +2,7 @@ name: Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main, work-v1.0.22, work-v1.0.23, work-v1.0.24, work-v1.0.25]
+    branches: [main, work-v1.0.22, work-v1.0.23, work-v1.0.24, work-v1.0.25, work-v1.0.26]
     paths: ["app.config.ts","eas.json","package.json","pnpm-lock.yaml","plugins/**","native/**","app/**","components/**","lib/**",".github/workflows/android-apk.yml"]
 permissions:
   contents: write

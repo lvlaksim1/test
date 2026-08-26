@@ -13,7 +13,7 @@ import java.util.concurrent.Executors
 data class ShizukuState(val isRunning:Boolean,val isPermissionGranted:Boolean)
 data class ShizukuCommandOutcome(val isSuccess:Boolean,val detail:String)
 object TimeShizukuController {
- private const val REQUEST_CODE=7201;private const val SERVICE_TAG="time-cycler-direct-time-v2";private const val SERVICE_VERSION=7;private const val SERVICE_PROCESS_SUFFIX="timecycler"
+ private const val REQUEST_CODE=7201;private const val SERVICE_TAG="time-cycler-direct-time-v2";private const val SERVICE_VERSION=9;private const val SERVICE_PROCESS_SUFFIX="timecycler"
  private val lock=Any();private val mainHandler=Handler(Looper.getMainLooper());private val executor=Executors.newSingleThreadExecutor();private var remoteService:ITimeShizukuService?=null;private var isBinding=false;private var pendingRequest:Pair<(ITimeShizukuService)->String,(ShizukuCommandOutcome)->Unit>?=null
  fun state():ShizukuState{val r=runCatching{Shizuku.pingBinder()}.getOrDefault(false);return ShizukuState(r,r&&runCatching{Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED}.getOrDefault(false))}
  fun requestPermission():Boolean{val c=state();if(!c.isRunning)return false;if(c.isPermissionGranted)return true;if(runCatching{Shizuku.shouldShowRequestPermissionRationale()}.getOrDefault(true))return false;return runCatching{Shizuku.requestPermission(REQUEST_CODE);false}.getOrDefault(false)}
