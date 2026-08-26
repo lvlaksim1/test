@@ -13,18 +13,16 @@ class TimeShizukuUserService : ITimeShizukuService.Stub() {
         val pid=runCommand("pidof '$packageName'").stdout.trim().split(Regex("\\s+")).firstOrNull{it.matches(Regex("\\d+"))}.orEmpty()
         val root="/sdcard/Android/data/$packageName/files"
         val tests=mutableListOf<Pair<String,String>>()
-        tests += "state-files" to "find '$root' -maxdepth 4 -type f -printf '%T@|%s|%p\\n' 2>/dev/null | sort -nr | head -n 400"
-        tests += "decoded-state-names" to "find '$root' -maxdepth 4 -type f 2>/dev/null | head -n 400 | while IFS= read -r f; do b=\$(basename \"\$f\"); d=\$(printf '%s' \"\$b\" | base64 -d 2>/dev/null | tr -d '\\000' | head -c 160); printf '%s|%s\\n' \"\$b\" \"\$d\"; done"
-        tests += "state-file-samples" to "find '$root' -maxdepth 4 -type f -size -262145c 2>/dev/null | head -n 80 | while IFS= read -r f; do echo ===\$f===; wc -c < \"\$f\"; od -An -tx1 -N64 \"\$f\" 2>/dev/null | head -n 2; strings -n 5 \"\$f\" 2>/dev/null | head -n 12; done"
+        tests += "target-state-files" to "for n in UserData save_player_1.0 save_player_1.1 save_world_1.0 save_world_1.1 save_weap_1.0 save_weap_1.1 save_content_force_gacha_1.0 save_content_force_gacha_1.1 save_shop_1.0 save_shop_1.1 save_analytics_1.0 save_analytics_1.1; do enc=\$(printf '%s' \"\$n\" | iconv -f UTF-8 -t UTF-16LE 2>/dev/null | base64 | tr -d '\\n'); f=\"$root/\$enc\"; if [ -f \"\$f\" ]; then echo ===\$n===; stat -c 'mtime=%Y size=%s' \"\$f\" 2>/dev/null; sha256sum \"\$f\" 2>/dev/null; echo '--hex-256--'; od -An -tx1 -N256 \"\$f\" 2>/dev/null; echo '--strings--'; strings -n 3 \"\$f\" 2>/dev/null | head -n 120; echo '--base64-first-4096--'; head -c 4096 \"\$f\" | base64 | head -c 6000; echo; fi; done"
+        tests += "json-state" to "for f in '$root'/session_data.json '$root'/device_info.json '$root'/device_installation_info.json; do [ -f \"\$f\" ] || continue; echo ===\$f===; cat \"\$f\" 2>/dev/null | head -c 12000; echo; done"
+        tests += "recent-state-files" to "find '$root' -maxdepth 1 -type f -printf '%T@|%s|%f\\n' 2>/dev/null | sort -nr | head -n 120"
         if(pid.isNotBlank()) {
-            tests += "game-logcat-full" to "logcat -d --pid=$pid -t 1200 -v threadtime 2>/dev/null | tail -n 1200"
-            tests += "game-logcat-semantic" to "logcat -d --pid=$pid -t 3000 -v threadtime 2>/dev/null | grep -iE 'ui|view|menu|button|btn_|gacha|weapon|lobby|shop|screen|open|close|click|quest|upgrade|equip' | tail -n 1000"
-            tests += "dynamic-datachanged" to "dumpsys activity broadcasts | grep -A 16 -B 5 -E '_dataChanged|$packageName' | head -n 600"
+            tests += "game-logcat-semantic" to "logcat -d --pid=$pid -t 5000 -v threadtime 2>/dev/null | grep -iE 'ui|view|menu|button|btn_|gacha|weapon|lobby|shop|screen|open|close|click|quest|upgrade|equip|analytics|event' | tail -n 1500"
         }
         return buildString {
-            append("OK:\nV27 XP Hero State Probe\npackage=").append(packageName).append("\npid=").append(if(pid.isBlank())"NOT_FOUND" else pid).append('\n')
-            append("\nИнструкция: повторите диагностику на двух разных экранах игры. Сравнивайте mtime/size state-files и game-logcat-semantic.\n")
-            tests.forEach { (name,cmd) -> val r=runCommand(cmd); append("\n=== ").append(name).append(" ===\ncommand: ").append(cmd).append("\nexit: ").append(r.exitCode); append("\nstdout:\n").append(r.stdout.ifBlank{"<empty>"}.take(30000)); append("\nstderr:\n").append(r.stderr.ifBlank{"<empty>"}.take(5000)).append('\n') }
+            append("OK:\nV28 XP Hero Target State Decoder\npackage=").append(packageName).append("\npid=").append(if(pid.isBlank())"NOT_FOUND" else pid).append('\n')
+            append("\nСнимите отчёт на нескольких разных экранах. V28 выводит содержимое только целевых state-файлов для поиска признака текущего UIView.\n")
+            tests.forEach { (name,cmd) -> val r=runCommand(cmd); append("\n=== ").append(name).append(" ===\ncommand: ").append(cmd).append("\nexit: ").append(r.exitCode); append("\nstdout:\n").append(r.stdout.ifBlank{"<empty>"}.take(45000)); append("\nstderr:\n").append(r.stderr.ifBlank{"<empty>"}.take(5000)).append('\n') }
         }
     }
     override fun destroy() {}
