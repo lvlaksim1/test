@@ -13,10 +13,21 @@ object TimeShizukuCycleRunner {
     private var generation = 0L
 
     fun start(context: Context) {
+        val appContext = context.applicationContext
         stopScheduledTask()
         commandInFlight = false
         generation += 1L
-        scheduleAt(context.applicationContext, SystemClock.elapsedRealtime(), generation)
+        val currentGeneration = generation
+        val savedDue = TimeCycleStore.nextDueElapsed(appContext)
+        if (savedDue != null) {
+            scheduleAt(appContext, savedDue, currentGeneration)
+            return
+        }
+        if (TimeCycleStore.completedCycles(appContext) == 0) {
+            prepareCycle(appContext, currentGeneration)
+        } else {
+            scheduleAt(appContext, SystemClock.elapsedRealtime(), currentGeneration)
+        }
     }
 
     fun stop() {
@@ -25,8 +36,26 @@ object TimeShizukuCycleRunner {
         commandInFlight = false
     }
 
+    private fun prepareCycle(context: Context, expectedGeneration: Long) {
+        if (expectedGeneration != generation || !TimeCycleStore.isRunning(context) || commandInFlight) return
+        commandInFlight = true
+        TimeShizukuController.setAutomaticTime(context, false) { outcome ->
+            if (expectedGeneration != generation) return@setAutomaticTime
+            commandInFlight = false
+            if (!TimeCycleStore.isRunning(context)) return@setAutomaticTime
+            if (!outcome.isSuccess) {
+                TimeCycleStore.markAttemptFailed(context, TimeCycleStore.targetForCurrentCycle(context), "Не удалось отключить автоматическое время. ${outcome.detail}")
+                TimeCycleForegroundService.stop(context)
+                return@setAutomaticTime
+            }
+            TimeCycleStore.setAutomaticTimeEnabled(context, false)
+            scheduleAt(context, SystemClock.elapsedRealtime(), expectedGeneration)
+        }
+    }
+
     private fun scheduleAt(context: Context, dueElapsed: Long, expectedGeneration: Long) {
         stopScheduledTask()
+        TimeCycleStore.setNextDueElapsed(context, dueElapsed)
         val task = object : Runnable {
             override fun run() {
                 if (expectedGeneration != generation || !TimeCycleStore.isRunning(context)) return
@@ -36,6 +65,7 @@ object TimeShizukuCycleRunner {
                     return
                 }
                 scheduledTask = null
+                TimeCycleStore.clearNextDueElapsed(context)
                 applyCurrentTarget(context, expectedGeneration)
             }
         }
@@ -70,7 +100,7 @@ object TimeShizukuCycleRunner {
                 return@applyTime
             }
 
-            val appliedElapsed = SystemClock.elapsedRealtime()
+            val appliedElapsed = outcome.appliedElapsedRealtime ?: SystemClock.elapsedRealtime()
             TimeCycleStore.setAutomaticTimeEnabled(context, false)
             val continueRunning = TimeCycleStore.markAttemptSucceeded(context, targetMillis, outcome.detail)
             if (!continueRunning) {

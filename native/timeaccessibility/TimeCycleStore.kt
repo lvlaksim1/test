@@ -24,6 +24,7 @@ object TimeCycleStore {
     private const val KEY_RUNNING = "is_running"
     private const val KEY_LAST_APPLIED = "last_applied_at"
     private const val KEY_AUTOMATIC_TIME = "automatic_time_enabled"
+    private const val KEY_NEXT_DUE_ELAPSED = "next_due_elapsed"
     private const val KEY_EVENTS = "events"
 
     private fun prefs(context: Context): SharedPreferences =
@@ -54,12 +55,16 @@ object TimeCycleStore {
             .putInt(KEY_COMPLETED, 0)
             .putBoolean(KEY_RUNNING, true)
             .remove(KEY_LAST_APPLIED)
+            .remove(KEY_NEXT_DUE_ELAPSED)
             .apply()
         addEvent(context, "Цикл запущен: главных циклов — $totalSeries, повторов в каждом — $repeatsPerSeries, всего изменений — $totalCycles.")
     }
 
     fun stop(context: Context, note: String = "Цикл остановлен пользователем.") {
-        prefs(context).edit().putBoolean(KEY_RUNNING, false).apply()
+        prefs(context).edit()
+            .putBoolean(KEY_RUNNING, false)
+            .remove(KEY_NEXT_DUE_ELAPSED)
+            .apply()
         addEvent(context, note)
     }
 
@@ -89,6 +94,19 @@ object TimeCycleStore {
         return seconds * 1000L
     }
 
+    fun nextDueElapsed(context: Context): Long? {
+        val storage = prefs(context)
+        return if (storage.contains(KEY_NEXT_DUE_ELAPSED)) storage.getLong(KEY_NEXT_DUE_ELAPSED, 0L) else null
+    }
+
+    fun setNextDueElapsed(context: Context, value: Long) {
+        prefs(context).edit().putLong(KEY_NEXT_DUE_ELAPSED, value).apply()
+    }
+
+    fun clearNextDueElapsed(context: Context) {
+        prefs(context).edit().remove(KEY_NEXT_DUE_ELAPSED).apply()
+    }
+
     fun setAutomaticTimeEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTOMATIC_TIME, enabled).apply()
     }
@@ -108,11 +126,12 @@ object TimeCycleStore {
         val completed = storage.getInt(KEY_COMPLETED, 0) + 1
         val total = storage.getInt(KEY_TOTAL, 0)
         val running = completed < total
-        storage.edit()
+        val editor = storage.edit()
             .putInt(KEY_COMPLETED, completed)
             .putBoolean(KEY_RUNNING, running)
             .putLong(KEY_LAST_APPLIED, targetMillis)
-            .apply()
+        if (!running) editor.remove(KEY_NEXT_DUE_ELAPSED)
+        editor.apply()
         val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
         addEvent(context, "Применено значение $formatted. $detail")
         if (!running) addEvent(context, "Все ${totalSeries(context)} главных циклов завершены. Выполнено изменений: $total.")
@@ -120,14 +139,20 @@ object TimeCycleStore {
     }
 
     fun markAttemptFailed(context: Context, targetMillis: Long, detail: String) {
-        prefs(context).edit().putBoolean(KEY_RUNNING, false).apply()
+        prefs(context).edit()
+            .putBoolean(KEY_RUNNING, false)
+            .remove(KEY_NEXT_DUE_ELAPSED)
+            .apply()
         val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
         addEvent(context, "Не подтверждено значение $formatted. $detail")
         addEvent(context, "Цикл остановлен из-за ошибки Shizuku.")
     }
 
     fun finishIfComplete(context: Context) {
-        prefs(context).edit().putBoolean(KEY_RUNNING, false).apply()
+        prefs(context).edit()
+            .putBoolean(KEY_RUNNING, false)
+            .remove(KEY_NEXT_DUE_ELAPSED)
+            .apply()
     }
 
     fun status(context: Context): JSONObject {
