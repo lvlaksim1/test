@@ -1,25 +1,25 @@
 package __PACKAGE__.timeaccessibility
 
+import android.os.SystemClock
 import kotlin.math.abs
 
 class TimeShizukuUserService : ITimeShizukuService.Stub() {
     override fun applyTime(targetMillis: Long): String {
-        val disableAutomatic = runCommand("settings put global auto_time 0")
         val setByAlarm = runCommand("cmd alarm set-time $targetMillis")
         val setResult = if (setByAlarm.exitCode == 0) {
             setByAlarm
         } else {
             runCommand("date -s @${targetMillis / 1000L}")
         }
+        val appliedElapsed = SystemClock.elapsedRealtime()
         val automaticValue = runCommand("settings get global auto_time")
         val currentTime = runCommand("date +%s")
         val currentMillis = currentTime.stdout.trim().toLongOrNull()?.times(1000L)
-        val verified = disableAutomatic.exitCode == 0 && setResult.exitCode == 0 &&
-            automaticValue.stdout.trim() == "0" && currentMillis != null &&
-            abs(currentMillis - targetMillis) <= 90_000L
+        val verified = setResult.exitCode == 0 && automaticValue.stdout.trim() == "0" &&
+            currentMillis != null && abs(currentMillis - targetMillis) <= 90_000L
 
         return if (verified) {
-            "OK: автоматическое время выключено, системные часы установлены."
+            "OK: системные часы установлены.\n__APPLIED_ELAPSED__=$appliedElapsed"
         } else {
             buildString {
                 append("ОШИБКА: auto=").append(compact(automaticValue.stdout))

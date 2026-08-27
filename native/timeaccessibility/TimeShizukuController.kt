@@ -18,6 +18,7 @@ data class ShizukuState(
 data class ShizukuCommandOutcome(
     val isSuccess: Boolean,
     val detail: String,
+    val appliedElapsedRealtime: Long? = null,
 )
 
 object TimeShizukuController {
@@ -25,6 +26,7 @@ object TimeShizukuController {
     private const val SERVICE_TAG = "time-cycler-direct-time-v2"
     private const val SERVICE_VERSION = 3
     private const val SERVICE_PROCESS_SUFFIX = "timecycler"
+    private val appliedElapsedRegex = Regex("(?:\\r?\\n)?__APPLIED_ELAPSED__=(\\d+)")
 
     private val lock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -138,9 +140,11 @@ object TimeShizukuController {
         callback: (ShizukuCommandOutcome) -> Unit,
     ) {
         executor.execute {
-            val detail = runCatching { command(service) }
+            val rawDetail = runCatching { command(service) }
                 .getOrElse { "ОШИБКА: ${it.message.orEmpty()}" }
-            deliver(callback, ShizukuCommandOutcome(detail.startsWith("OK:"), detail))
+            val appliedElapsed = appliedElapsedRegex.find(rawDetail)?.groupValues?.getOrNull(1)?.toLongOrNull()
+            val detail = rawDetail.replace(appliedElapsedRegex, "").trim()
+            deliver(callback, ShizukuCommandOutcome(detail.startsWith("OK:"), detail, appliedElapsed))
         }
     }
 
