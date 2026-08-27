@@ -13,7 +13,13 @@ on:
       - "native/**"
       - "app/**"
       - "components/**"
+      - "constants/**"
+      - "hooks/**"
       - "lib/**"
+      - "global.css"
+      - "babel.config.js"
+      - "metro.config.js"
+      - "theme.config.js"
       - ".github/workflows/android-apk.yml"
 
 permissions:
