@@ -1,39 +1,32 @@
 import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
 
-const rawBundleId = "com.app.androidtimecycler";
-const bundleId =
-  rawBundleId
-    .replace(/[-_]/g, ".")
-    .replace(/[^a-zA-Z0-9.]/g, "")
-    .replace(/\.+/g, ".")
-    .replace(/^\.+|\.+$/g, "")
-    .toLowerCase()
-    .split(".")
-    .map((segment) => (/^[a-zA-Z]/.test(segment) ? segment : `x${segment}`))
-    .join(".") || "space.manus.app";
+export const APP_VERSION = "23";
+export const ANDROID_VERSION_CODE = 123;
 
-const env = {
-  appName: "Машина времени",
-  appSlug: "android-time-cycler",
-  logoUrl: "/manus-storage/android-time-cycler-icon_cca46255.png",
-  scheme: "timecycler",
-  iosBundleId: bundleId,
-  androidPackage: bundleId,
-};
+const rawBundleId = "com.app.androidtimecycler";
+const bundleId = rawBundleId
+  .replace(/[-_]/g, ".")
+  .replace(/[^a-zA-Z0-9.]/g, "")
+  .replace(/\.+/g, ".")
+  .replace(/^\.+|\.+$/g, "")
+  .toLowerCase()
+  .split(".")
+  .map((segment) => (/^[a-zA-Z]/.test(segment) ? segment : `x${segment}`))
+  .join(".") || "space.manus.app";
 
 const config: ExpoConfig = {
-  name: env.appName,
-  slug: env.appSlug,
-  version: "22",
+  name: "Машина времени",
+  slug: "android-time-cycler",
+  version: APP_VERSION,
   orientation: "portrait",
   icon: "./assets/images/icon.png",
-  scheme: env.scheme,
+  scheme: "timecycler",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
   ios: {
     supportsTablet: true,
-    bundleIdentifier: env.iosBundleId,
+    bundleIdentifier: bundleId,
     infoPlist: { ITSAppUsesNonExemptEncryption: false },
   },
   android: {
@@ -46,27 +39,14 @@ const config: ExpoConfig = {
     edgeToEdgeEnabled: false,
     predictiveBackGestureEnabled: false,
     softwareKeyboardLayoutMode: "resize",
-    package: env.androidPackage,
-    versionCode: 122,
+    package: bundleId,
+    versionCode: ANDROID_VERSION_CODE,
     permissions: ["POST_NOTIFICATIONS"],
-  },
-  web: {
-    bundler: "metro",
-    output: "static",
-    favicon: "./assets/images/favicon.png",
-  },
-  extra: {
-    eas: {
-      projectId: "136ab1c4-ae98-4502-a9b5-1ebd84c51e8d",
-    },
   },
   plugins: [
     "expo-router",
     "./plugins/with-time-shizuku",
-    "expo-audio",
     "expo-font",
-    "expo-video",
-    "expo-web-browser",
     [
       "expo-splash-screen",
       {
@@ -80,7 +60,7 @@ const config: ExpoConfig = {
     [
       "expo-build-properties",
       {
-        android: { buildArchs: ["armeabi-v7a", "arm64-v8a"], minSdkVersion: 24 },
+        android: { buildArchs: ["arm64-v8a"], minSdkVersion: 24 },
       },
     ],
   ],
