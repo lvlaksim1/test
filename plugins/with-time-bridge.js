@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const PLUGIN_NAME = "with-time-bridge";
-const PLUGIN_VERSION = "1.0.3";
+const PLUGIN_VERSION = "1.0.4";
 
 function withTimeBridge(config) {
   config = withAndroidManifest(config, (mod) => {
@@ -49,6 +49,21 @@ function withTimeBridge(config) {
       }
     }
 
+    application.provider = application.provider ?? [];
+    const providerName = `${config.android.package}.timeaccessibility.TimeBinderProvider`;
+    const providerAuthority = `${config.android.package}.timebridge`;
+    if (!application.provider.some((provider) => provider.$?.["android:name"] === providerName)) {
+      application.provider.push({
+        $: {
+          "android:name": providerName,
+          "android:authorities": providerAuthority,
+          "android:enabled": "true",
+          "android:exported": "true",
+          "android:grantUriPermissions": "false",
+        },
+      });
+    }
+
     application.activity = application.activity ?? [];
     const launcherActivityName = `${config.android.package}.timeaccessibility.TimePairingLauncherActivity`;
     if (!application.activity.some((activity) => activity.$?.["android:name"] === launcherActivityName)) {
@@ -90,6 +105,13 @@ function withTimeBridge(config) {
         mod.modResults.contents = mod.modResults.contents.replace(/dependencies\s*\{/, `dependencies {\n    ${dependency}`);
       }
     }
+
+    if (!mod.modResults.contents.includes('src/main/cpp/CMakeLists.txt')) {
+      mod.modResults.contents = mod.modResults.contents.replace(
+        /android\s*\{/,
+        'android {\n    externalNativeBuild {\n        cmake {\n            path file("src/main/cpp/CMakeLists.txt")\n        }\n    }',
+      );
+    }
     return mod;
   });
 
@@ -119,9 +141,9 @@ function withTimeBridge(config) {
       "TimeCycleStore.kt",
       "TimeLocalAdbConnectionManager.kt",
       "TimeLocalAdbController.kt",
-      "TimeShellBridge.kt",
-      "TimeShellServer.kt",
-      "TimeShellServerEntry.java",
+      "TimePrivilegedBridge.kt",
+      "TimeBinderProvider.kt",
+      "TimePrivilegedServer.java",
       "TimeCycleRunner.kt",
       "TimeCycleForegroundService.kt",
       "TimePairingService.kt",
@@ -129,6 +151,13 @@ function withTimeBridge(config) {
     ]) {
       const source = fs.readFileSync(path.join(sourceRoot, fileName), "utf8");
       fs.writeFileSync(path.join(sourceTargetRoot, fileName), source.replaceAll("__PACKAGE__", packageName));
+    }
+
+    const nativeSourceRoot = path.join(sourceRoot, "starter");
+    const nativeTargetRoot = path.join(projectRoot, "app", "src", "main", "cpp");
+    fs.mkdirSync(nativeTargetRoot, { recursive: true });
+    for (const fileName of ["CMakeLists.txt", "time_machine_starter.cpp"]) {
+      fs.copyFileSync(path.join(nativeSourceRoot, fileName), path.join(nativeTargetRoot, fileName));
     }
     return mod;
   }]);
