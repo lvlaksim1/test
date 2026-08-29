@@ -1,6 +1,6 @@
 import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
-// Release 29 - local ADB diagnostic experiment.
+// Release 29 - local ADB diagnostic experiment build.
 const rawBundleId="com.app.androidtimecycler"; const bundleId=rawBundleId.replace(/[-_]/g,".").replace(/[^a-zA-Z0-9.]/g,"").replace(/\.+/g,".").replace(/^\.+|\.+$/g,"").toLowerCase().split(".").map((segment)=>(/^[a-zA-Z]/.test(segment)?segment:`x${segment}`)).join(".")||"space.manus.app";
 const env={appName:"Машина времени",appSlug:"android-time-cycler",logoUrl:"/manus-storage/android-time-cycler-icon_cca46255.png",scheme:"timecycler",iosBundleId:bundleId,androidPackage:bundleId};
 const config:ExpoConfig={
