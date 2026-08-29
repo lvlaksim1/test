@@ -4,7 +4,6 @@ package __PACKAGE__.timeaccessibility
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import io.github.muntashirakon.adb.LocalServices
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -84,7 +83,7 @@ object TimeLocalAdbExperiment {
             } else {
                 setLocalMode(appContext, false)
                 SystemCommandOutcome(false, buildString {
-                    append("Локальное соединение установлено, но контрольные команды не прошли.\n")
+                    append("Локальное ADB-соединение и аутентификация прошли, но контрольные команды не прошли.\n")
                     append("id=").append(compact(identity.describe())).append("\n")
                     append("service.adb.tcp.port=").append(compact(afterPort.describe()))
                 })
@@ -114,7 +113,7 @@ object TimeLocalAdbExperiment {
 
             val wifiOff = runShell(appContext, manager, "svc wifi disable")
             if (wifiOff.exitCode != 0) {
-                deliver(callback, SystemCommandOutcome(false, "Команда отключения Wi‑Fi не выполнена: ${compact(wifiOff.describe())}"))
+                deliver(callback, SystemCommandOutcome(false, "Команда отключения Wi-Fi не выполнена: ${compact(wifiOff.describe())}"))
                 return@execute
             }
 
@@ -125,9 +124,9 @@ object TimeLocalAdbExperiment {
             if (!connectLocal(manager)) {
                 setLocalMode(appContext, false)
                 deliver(callback, SystemCommandOutcome(false, buildString {
-                    append("Wi‑Fi отключён командой shell: OK\n")
+                    append("Wi-Fi отключён командой shell: OK\n")
                     append("Повторное подключение к $LOCAL_HOST:$LOCAL_PORT: ОШИБКА\n")
-                    append("Включите Wi‑Fi вручную. Локальный ADB без Wi‑Fi на этом устройстве не удержался.")
+                    append("Включите Wi-Fi вручную. Локальный ADB без Wi-Fi на этом устройстве не удержался.")
                 }))
                 return@execute
             }
@@ -140,11 +139,11 @@ object TimeLocalAdbExperiment {
 
             val outcome = if (verified) {
                 SystemCommandOutcome(true, buildString {
-                    append("Wi‑Fi отключён: OK\n")
+                    append("Wi-Fi отключён: OK\n")
                     append("Повторное подключение $LOCAL_HOST:$LOCAL_PORT: OK\n")
-                    append("shell после отключения Wi‑Fi: OK — ").append(compact(identity.stdout)).append("\n")
+                    append("shell после отключения Wi-Fi: OK — ").append(compact(identity.stdout)).append("\n")
                     append("date +%s: ").append(compact(epoch.stdout)).append("\n")
-                    append("РЕЗУЛЬТАТ: локальный ADB работает без Wi‑Fi.")
+                    append("РЕЗУЛЬТАТ: локальный ADB работает без Wi-Fi.")
                 })
             } else {
                 SystemCommandOutcome(false, buildString {
@@ -164,11 +163,11 @@ object TimeLocalAdbExperiment {
             val manager = TimeLocalAdbConnectionManager.getInstance(appContext)
             val connected = manager.isConnected || connectLocal(manager) || ensureCurrentConnection(appContext, manager)
             if (!connected) {
-                deliver(callback, SystemCommandOutcome(false, "ADB-подключение недоступно. Включите Wi‑Fi вручную."))
+                deliver(callback, SystemCommandOutcome(false, "ADB-подключение недоступно. Включите Wi-Fi вручную."))
                 return@execute
             }
             val result = runShell(appContext, manager, "svc wifi enable")
-            deliver(callback, if (result.exitCode == 0) SystemCommandOutcome(true, "Команда включения Wi‑Fi выполнена.") else SystemCommandOutcome(false, "Не удалось включить Wi‑Fi: ${compact(result.describe())}"))
+            deliver(callback, if (result.exitCode == 0) SystemCommandOutcome(true, "Команда включения Wi-Fi выполнена.") else SystemCommandOutcome(false, "Не удалось включить Wi-Fi: ${compact(result.describe())}"))
         }
     }
 
@@ -215,21 +214,18 @@ object TimeLocalAdbExperiment {
     private fun runShell(context: Context, manager: TimeLocalAdbConnectionManager, command: String): CommandResult {
         if (!manager.isConnected && !ensureCurrentConnection(context, manager)) return CommandResult(-1, "", "ADB не подключён")
         return runCatching {
-            val stream = manager.openStream(LocalServices.SHELL)
+            // Use a one-shot shell service. On this device the interactive shell stream over
+            // legacy TCP stays open after the command and therefore readText() never reaches EOF.
             val marker = "__TM_DIAG_${System.nanoTime()}__"
-            val request = "$command; code=${'$'}?; echo $marker${'$'}code; exit\n"
-            stream.openOutputStream().use { output ->
-                output.write(request.toByteArray(Charsets.UTF_8))
-                output.flush()
-            }
-
+            val request = "$command; code=${'$'}?; echo $marker${'$'}code"
+            val stream = manager.openStream("shell:$request")
             val future = readerExecutor.submit<String> { stream.openInputStream().bufferedReader().use { it.readText() } }
             val raw = try {
                 future.get(6, TimeUnit.SECONDS)
             } catch (_: Throwable) {
                 runCatching { stream.close() }
                 future.cancel(true)
-                return CommandResult(-1, "", "тайм-аут ADB shell")
+                return CommandResult(-1, "", "тайм-аут одноразового ADB shell")
             }
             runCatching { stream.close() }
 
