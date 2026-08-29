@@ -1,5 +1,7 @@
 package __PACKAGE__.timeaccessibility
 
+import android.content.Intent
+import android.provider.Settings
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -16,21 +18,32 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
 
     @ReactMethod
     fun getStatus(promise: Promise) {
-        val status = jsonToWritableMap(TimeCycleStore.status(context))
-        val shizuku = TimeShizukuController.state()
-        status.putBoolean("isShizukuRunning", shizuku.isRunning)
-        status.putBoolean("isShizukuPermissionGranted", shizuku.isPermissionGranted)
-        promise.resolve(status)
+        promise.resolve(statusWithAccess())
     }
 
     @ReactMethod
-    fun requestShizukuPermission(promise: Promise) {
-        val current = TimeShizukuController.state()
-        if (!current.isRunning) {
-            promise.reject("SHIZUKU_NOT_RUNNING", "Сначала установите и запустите Shizuku через беспроводную отладку.")
-            return
+    fun connectSystemAccess(promise: Promise) {
+        TimeLocalAdbController.connect(context) { outcome ->
+            if (outcome.isSuccess) promise.resolve(statusWithAccess())
+            else promise.reject("SYSTEM_ACCESS_CONNECT_FAILED", outcome.detail)
         }
-        if (current.isPermissionGranted || TimeShizukuController.requestPermission()) promise.resolve(true) else promise.resolve(false)
+    }
+
+    @ReactMethod
+    fun pairSystemAccess(pairingCode: String, promise: Promise) {
+        TimeLocalAdbController.pair(context, pairingCode) { outcome ->
+            if (outcome.isSuccess) promise.resolve(statusWithAccess())
+            else promise.reject("SYSTEM_ACCESS_PAIR_FAILED", outcome.detail)
+        }
+    }
+
+    @ReactMethod
+    fun openDeveloperSettings(promise: Promise) {
+        runCatching {
+            val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }.onSuccess { promise.resolve(true) }
+            .onFailure { promise.reject("DEVELOPER_SETTINGS_FAILED", "Не удалось открыть настройки разработчика.", it) }
     }
 
     @ReactMethod
@@ -39,11 +52,11 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
             promise.reject("CYCLE_RUNNING", "Нельзя переключать синхронизацию во время выполнения цикла.")
             return
         }
-        TimeShizukuController.setAutomaticTime(context, enabled) { outcome ->
+        TimeLocalAdbController.setAutomaticTime(context, enabled) { outcome ->
             if (outcome.isSuccess) {
                 TimeCycleStore.setAutomaticTimeEnabled(context, enabled)
                 TimeCycleStore.addEvent(context, outcome.detail)
-                promise.resolve(jsonToWritableMap(TimeCycleStore.status(context)))
+                promise.resolve(statusWithAccess())
             } else {
                 promise.reject("AUTOMATIC_TIME_FAILED", outcome.detail)
             }
@@ -52,9 +65,8 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
 
     @ReactMethod
     fun startCycle(settings: ReadableMap, promise: Promise) {
-        val shizuku = TimeShizukuController.state()
-        if (!shizuku.isPermissionGranted) {
-            promise.reject("SHIZUKU_PERMISSION_REQUIRED", "Сначала запустите Shizuku и нажмите «Разрешить Shizuku» в приложении.")
+        if (!TimeLocalAdbController.state(context).isReady) {
+            promise.reject("SYSTEM_ACCESS_REQUIRED", "Сначала подключите системный доступ через беспроводную отладку.")
             return
         }
         runCatching {
@@ -76,22 +88,30 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
             require(days in -999..999 && hours in -999..999 && minutes in -999..999) { "Шаг задан вне допустимого диапазона." }
             TimeCycleStore.saveAndStart(context, startAt, days, hours, minutes, pause, repeatsPerSeries, seriesPause, totalSeries, total)
             TimeCycleForegroundService.start(context)
-        }.onSuccess { promise.resolve(jsonToWritableMap(TimeCycleStore.status(context))) }
+        }.onSuccess { promise.resolve(statusWithAccess()) }
             .onFailure { promise.reject("START_FAILED", it.message ?: "Не удалось запустить цикл.", it) }
     }
 
     @ReactMethod
     fun stopCycle(promise: Promise) {
-        TimeShizukuCycleRunner.stop()
+        TimeCycleRunner.stop()
         TimeCycleStore.stop(context)
         TimeCycleForegroundService.stop(context)
-        promise.resolve(jsonToWritableMap(TimeCycleStore.status(context)))
+        promise.resolve(statusWithAccess())
     }
 
     @ReactMethod
     fun clearEvents(promise: Promise) {
         TimeCycleStore.clearEvents(context)
         promise.resolve(true)
+    }
+
+    private fun statusWithAccess(): WritableMap {
+        val status = jsonToWritableMap(TimeCycleStore.status(context))
+        val access = TimeLocalAdbController.state(context)
+        status.putBoolean("isSystemAccessReady", access.isReady)
+        status.putString("systemAccessDetail", access.detail)
+        return status
     }
 
     private fun jsonToWritableMap(value: JSONObject): WritableMap {

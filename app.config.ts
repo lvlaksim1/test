@@ -1,7 +1,7 @@
 import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
 
-// Release 25.
+// Release 26.
 const rawBundleId = "com.app.androidtimecycler";
 const bundleId =
   rawBundleId
@@ -26,7 +26,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.25",
+  version: "1.0.26",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -48,7 +48,7 @@ const config: ExpoConfig = {
     predictiveBackGestureEnabled: false,
     softwareKeyboardLayoutMode: "resize",
     package: env.androidPackage,
-    versionCode: 125,
+    versionCode: 126,
     permissions: ["POST_NOTIFICATIONS"],
   },
   web: {
@@ -63,7 +63,7 @@ const config: ExpoConfig = {
   },
   plugins: [
     "expo-router",
-    "./plugins/with-time-shizuku",
+    "./plugins/with-time-bridge",
     "expo-audio",
     "expo-font",
     "expo-video",

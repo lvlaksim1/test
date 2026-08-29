@@ -4,8 +4,8 @@ import type { CycleConfig } from "@/lib/cycle-utils";
 
 export type CycleEvent = { at: number; message: string };
 export type TimeControlStatus = {
-  isShizukuRunning: boolean;
-  isShizukuPermissionGranted: boolean;
+  isSystemAccessReady: boolean;
+  systemAccessDetail: string;
   isAutomaticTimeEnabled: boolean;
   isRunning: boolean;
   completedCycles: number;
@@ -17,7 +17,9 @@ export type TimeControlStatus = {
 
 type NativeTimeControl = {
   getStatus: () => Promise<TimeControlStatus>;
-  requestShizukuPermission: () => Promise<boolean>;
+  connectSystemAccess: () => Promise<TimeControlStatus>;
+  pairSystemAccess: (pairingCode: string) => Promise<TimeControlStatus>;
+  openDeveloperSettings: () => Promise<boolean>;
   setAutomaticTime: (enabled: boolean) => Promise<TimeControlStatus>;
   startCycle: (config: CycleConfig) => Promise<TimeControlStatus>;
   stopCycle: () => Promise<TimeControlStatus>;
@@ -26,12 +28,20 @@ type NativeTimeControl = {
 
 const nativeModule = NativeModules.TimeControl as NativeTimeControl | undefined;
 export const isNativeTimeControlAvailable = Platform.OS === "android" && Boolean(nativeModule);
-const webStatus: TimeControlStatus = { isShizukuRunning: false, isShizukuPermissionGranted: false, isAutomaticTimeEnabled: true, isRunning: false, completedCycles: 0, totalCycles: 0, nextTargetMillis: null, lastAppliedMillis: null, events: [] };
+const webStatus: TimeControlStatus = { isSystemAccessReady: false, systemAccessDetail: "Системный доступ доступен только в Android APK.", isAutomaticTimeEnabled: true, isRunning: false, completedCycles: 0, totalCycles: 0, nextTargetMillis: null, lastAppliedMillis: null, events: [] };
 
 export async function getTimeControlStatus(): Promise<TimeControlStatus> { return nativeModule ? nativeModule.getStatus() : webStatus; }
-export async function requestShizukuPermission(): Promise<boolean> {
-  if (!nativeModule) throw new Error("Shizuku доступен только в собранном Android APK.");
-  return nativeModule.requestShizukuPermission();
+export async function connectSystemAccess(): Promise<TimeControlStatus> {
+  if (!nativeModule) throw new Error("Системный доступ доступен только в собранном Android APK.");
+  return nativeModule.connectSystemAccess();
+}
+export async function pairSystemAccess(pairingCode: string): Promise<TimeControlStatus> {
+  if (!nativeModule) throw new Error("Сопряжение доступно только в собранном Android APK.");
+  return nativeModule.pairSystemAccess(pairingCode);
+}
+export async function openDeveloperSettings(): Promise<boolean> {
+  if (!nativeModule) throw new Error("Настройки разработчика доступны только на Android.");
+  return nativeModule.openDeveloperSettings();
 }
 export async function setAutomaticTime(enabled: boolean): Promise<TimeControlStatus> {
   if (!nativeModule) throw new Error("Переключатель синхронизации доступен только в собранном Android APK.");

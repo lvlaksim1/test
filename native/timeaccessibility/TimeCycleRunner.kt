@@ -5,8 +5,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 
-/** Runs the cycle while the foreground service keeps the app process active. Shizuku performs the privileged time change. */
-object TimeShizukuCycleRunner {
+/** Runs the cycle while the foreground service keeps the app process active. Wireless ADB performs the privileged time change. */
+object TimeCycleRunner {
     private val handler = Handler(Looper.getMainLooper())
     private var scheduledTask: Runnable? = null
     private var commandInFlight = false
@@ -60,12 +60,12 @@ object TimeShizukuCycleRunner {
         val targetMillis = TimeCycleStore.targetForCurrentCycle(context)
         TimeCycleStore.addEvent(context, "Главный цикл $seriesIndex из $seriesTotal, повтор $repeatIndex из $repeats.")
         commandInFlight = true
-        TimeShizukuController.applyTime(context, targetMillis) { outcome ->
+        TimeLocalAdbController.applyTime(context, targetMillis) { outcome ->
             if (expectedGeneration != generation) return@applyTime
             commandInFlight = false
             if (!TimeCycleStore.isRunning(context)) return@applyTime
             if (!outcome.isSuccess) {
-                TimeCycleStore.markAttemptFailed(context, targetMillis, "Shizuku не применил системное время. ${outcome.detail}")
+                TimeCycleStore.markAttemptFailed(context, targetMillis, "Системный доступ не применил системное время. ${outcome.detail}")
                 TimeCycleForegroundService.stop(context)
                 return@applyTime
             }
