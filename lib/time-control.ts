@@ -41,13 +41,22 @@ const webStatus: TimeControlStatus = {
   events: [],
 };
 
+let initialConnectSkipped = false;
+
 function requireNative(): NativeTimeControl {
   if (!nativeModule) throw new Error("Функция доступна только в Android APK.");
   return nativeModule;
 }
 
 export async function getTimeControlStatus() { return nativeModule ? nativeModule.getStatus() : webStatus; }
-export async function connectSystemAccess() { return requireNative().connectSystemAccess(); }
+export async function connectSystemAccess() {
+  const module = requireNative();
+  if (!initialConnectSkipped) {
+    initialConnectSkipped = true;
+    return module.getStatus();
+  }
+  return module.connectSystemAccess();
+}
 export async function pairSystemAccess(code: string) { return requireNative().pairSystemAccess(code); }
 export async function openDeveloperSettings() { return requireNative().openDeveloperSettings(); }
 export async function openDateTimeSettings() { return requireNative().openDateTimeSettings(); }
