@@ -35,6 +35,21 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
     @ReactMethod fun pairSystemAccess(pairingCode: String, promise: Promise) { TimeLocalAdbController.pair(context, pairingCode) { outcome -> if (outcome.isSuccess) { TimePairingService.stop(context); promise.resolve(statusWithAccess()) } else promise.reject("SYSTEM_ACCESS_PAIR_FAILED", outcome.detail) } }
 
     @ReactMethod
+    fun prepareLocalAdbDiagnostic(promise: Promise) {
+        TimeLocalAdbController.prepareLocalAdb(context) { outcome -> promise.resolve(diagnosticResult(outcome)) }
+    }
+
+    @ReactMethod
+    fun testLocalAdbWithoutWifi(promise: Promise) {
+        TimeLocalAdbController.testLocalAdbWithoutWifi(context) { outcome -> promise.resolve(diagnosticResult(outcome)) }
+    }
+
+    @ReactMethod
+    fun enableWifiViaLocalAdb(promise: Promise) {
+        TimeLocalAdbController.enableWifiViaLocalAdb(context) { outcome -> promise.resolve(diagnosticResult(outcome)) }
+    }
+
+    @ReactMethod
     fun openDeveloperSettings(promise: Promise) {
         runCatching { context.startActivity(Intent(context, TimePairingLauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             .onSuccess { promise.resolve(true) }.onFailure { promise.reject("DEVELOPER_SETTINGS_FAILED", "Не удалось открыть настройки разработчика.", it) }
@@ -57,7 +72,7 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
 
     @ReactMethod
     fun startCycle(settings: ReadableMap, promise: Promise) {
-        if (!TimeLocalAdbController.state(context).isReady) { promise.reject("SYSTEM_ACCESS_REQUIRED", "Сначала подключите системный доступ через беспроводную отладку."); return }
+        if (!TimeLocalAdbController.state(context).isReady) { promise.reject("SYSTEM_ACCESS_REQUIRED", "Сначала подключите системный доступ."); return }
         runCatching {
             val startAt = settings.getDouble("startAtMillis").toLong(); val days = settings.getInt("stepDays"); val hours = settings.getInt("stepHours"); val minutes = settings.getInt("stepMinutes"); val pause = settings.getInt("pauseSeconds"); val repeatsPerSeries = settings.getInt("repeatsPerSeries"); val seriesPause = settings.getInt("seriesPauseSeconds"); val totalSeries = settings.getInt("totalSeries"); val total = settings.getInt("totalCycles")
             require(pause in 1..86400); require(seriesPause in 0..86400); require(repeatsPerSeries in 1..99999); require(totalSeries in 1..99999)
@@ -69,6 +84,7 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
     @ReactMethod fun stopCycle(promise: Promise) { TimeCycleRunner.stop(); TimeCycleStore.stop(context); TimeCycleForegroundService.stop(context); promise.resolve(statusWithAccess()) }
     @ReactMethod fun clearEvents(promise: Promise) { TimeCycleStore.clearEvents(context); promise.resolve(true) }
 
+    private fun diagnosticResult(outcome: SystemCommandOutcome): WritableMap = Arguments.createMap().apply { putBoolean("success", outcome.isSuccess); putString("detail", outcome.detail) }
     private fun statusWithAccess(): WritableMap { val status = jsonToWritableMap(TimeCycleStore.status(context)); val access = TimeLocalAdbController.state(context); status.putBoolean("isSystemAccessReady", access.isReady); status.putString("systemAccessDetail", access.detail); return status }
     private fun jsonToWritableMap(value: JSONObject): WritableMap { val result = Arguments.createMap(); val iterator = value.keys(); while (iterator.hasNext()) { val key = iterator.next(); when (val item = value.opt(key)) { null, JSONObject.NULL -> result.putNull(key); is Boolean -> result.putBoolean(key,item); is Int -> result.putInt(key,item); is Long -> result.putDouble(key,item.toDouble()); is Double -> result.putDouble(key,item); is String -> result.putString(key,item); is JSONObject -> result.putMap(key,jsonToWritableMap(item)); is JSONArray -> result.putArray(key,jsonToWritableArray(item)); else -> result.putString(key,item.toString()) } }; return result }
     private fun jsonToWritableArray(value: JSONArray): WritableArray { val result=Arguments.createArray(); for(index in 0 until value.length()){ when(val item=value.opt(index)){ null,JSONObject.NULL->result.pushNull(); is Boolean->result.pushBoolean(item); is Int->result.pushInt(item); is Long->result.pushDouble(item.toDouble()); is Double->result.pushDouble(item); is String->result.pushString(item); is JSONObject->result.pushMap(jsonToWritableMap(item)); is JSONArray->result.pushArray(jsonToWritableArray(item)); else->result.pushString(item.toString()) } }; return result }
