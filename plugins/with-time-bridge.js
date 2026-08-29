@@ -109,7 +109,7 @@ function withTimeBridge(config) {
     if (!mod.modResults.contents.includes('src/main/cpp/CMakeLists.txt')) {
       mod.modResults.contents = mod.modResults.contents.replace(
         /android\s*\{/,
-        'android {\n    externalNativeBuild {\n        cmake {\n            path file("src/main/cpp/CMakeLists.txt")\n        }\n    }',
+        'android {\n    externalNativeBuild {\n        cmake {\n            path file("src/main/cpp/CMakeLists.txt")\n        }\n    }\n    packagingOptions {\n        jniLibs {\n            useLegacyPackaging true\n        }\n    }',
       );
     }
     return mod;
@@ -156,7 +156,7 @@ function withTimeBridge(config) {
     const nativeSourceRoot = path.join(sourceRoot, "starter");
     const nativeTargetRoot = path.join(projectRoot, "app", "src", "main", "cpp");
     fs.mkdirSync(nativeTargetRoot, { recursive: true });
-    for (const fileName of ["CMakeLists.txt", "time_machine_starter.cpp"]) {
+    for (const fileName of ["CMakeLists.txt", "time_machine_starter.c"]) {
       fs.copyFileSync(path.join(nativeSourceRoot, fileName), path.join(nativeTargetRoot, fileName));
     }
     return mod;
