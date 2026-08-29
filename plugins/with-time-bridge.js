@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const PLUGIN_NAME = "with-time-bridge";
-const PLUGIN_VERSION = "1.0.2";
+const PLUGIN_VERSION = "1.0.3";
 
 function withTimeBridge(config) {
   config = withAndroidManifest(config, (mod) => {
@@ -111,8 +111,8 @@ function withTimeBridge(config) {
     if (!packageName) throw new Error("android.package must be set before adding the Time Bridge");
     const projectRoot = mod.modRequest.platformProjectRoot;
     const sourceRoot = path.join(__dirname, "..", "native", "timeaccessibility");
-    const kotlinRoot = path.join(projectRoot, "app", "src", "main", "java", ...packageName.split("."), "timeaccessibility");
-    fs.mkdirSync(kotlinRoot, { recursive: true });
+    const sourceTargetRoot = path.join(projectRoot, "app", "src", "main", "java", ...packageName.split("."), "timeaccessibility");
+    fs.mkdirSync(sourceTargetRoot, { recursive: true });
     for (const fileName of [
       "TimeControlModule.kt",
       "TimeControlPackage.kt",
@@ -121,13 +121,14 @@ function withTimeBridge(config) {
       "TimeLocalAdbController.kt",
       "TimeShellBridge.kt",
       "TimeShellServer.kt",
+      "TimeShellServerEntry.java",
       "TimeCycleRunner.kt",
       "TimeCycleForegroundService.kt",
       "TimePairingService.kt",
       "TimePairingLauncherActivity.kt",
     ]) {
       const source = fs.readFileSync(path.join(sourceRoot, fileName), "utf8");
-      fs.writeFileSync(path.join(kotlinRoot, fileName), source.replaceAll("__PACKAGE__", packageName));
+      fs.writeFileSync(path.join(sourceTargetRoot, fileName), source.replaceAll("__PACKAGE__", packageName));
     }
     return mod;
   }]);
