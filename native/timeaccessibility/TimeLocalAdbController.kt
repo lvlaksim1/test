@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import io.github.muntashirakon.adb.AdbPairingRequiredException
 import io.github.muntashirakon.adb.android.AdbMdns
 import java.util.concurrent.CountDownLatch
@@ -17,33 +18,35 @@ data class SystemAccessState(val isReady: Boolean, val detail: String)
 data class SystemCommandOutcome(val isSuccess: Boolean, val detail: String)
 
 /**
- * Wireless ADB is only a bootstrap transport. Once it is available we start a
- * detached app_process as uid=2000. The normal application then talks to that
- * process through a token-protected loopback socket, so killing/restarting the
- * application does not require another ADB connection during the same boot.
+ * Wireless ADB is only the bootstrap transport. It launches a Shizuku-style
+ * detached uid=2000 process through a native fork/setsid starter. The normal
+ * application talks to that process through Binder, and the server re-delivers
+ * its Binder whenever the application process is created again.
  */
 object TimeLocalAdbController {
     private val executor = Executors.newSingleThreadExecutor()
     private val readerExecutor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
-    @Volatile private var lastDetail = "Системный доступ не подключён."
+
+    @Volatile
+    private var lastDetail = "Системный доступ не подключён."
 
     fun state(context: Context): SystemAccessState {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return SystemAccessState(false, "Встроенный системный доступ требует Android 11 или новее.")
         }
-        if (TimeShellBridge.isLikelyActive(context)) {
-            val ping = TimeShellBridge.ping(context)
-            if (ping.success && ping.detail.contains("uid=2000")) {
-                return SystemAccessState(true, "Системный сервис активен до перезагрузки телефона.")
-            }
-            TimeShellBridge.markInactive(context)
+
+        val ping = TimePrivilegedBridge.ping()
+        return if (ping.success && ping.detail.contains("uid=2000")) {
+            lastDetail = "Системный сервис активен до перезагрузки телефона."
+            SystemAccessState(true, lastDetail)
+        } else {
+            SystemAccessState(false, lastDetail)
         }
-        return SystemAccessState(false, lastDetail)
     }
 
     fun connect(context: Context, callback: (SystemCommandOutcome) -> Unit) {
-        executor.execute { deliver(callback, ensureShellServer(context.applicationContext)) }
+        executor.execute { deliver(callback, ensurePrivilegedServer(context.applicationContext)) }
     }
 
     fun pair(context: Context, pairingCode: String, callback: (SystemCommandOutcome) -> Unit) {
@@ -63,16 +66,16 @@ object TimeLocalAdbController {
     fun applyTime(context: Context, targetMillis: Long, callback: (SystemCommandOutcome) -> Unit) {
         executor.execute {
             val appContext = context.applicationContext
-            val access = ensureShellServer(appContext)
+            val access = ensurePrivilegedServer(appContext)
             if (!access.isSuccess) {
                 deliver(callback, access)
                 return@execute
             }
-            val reply = TimeShellBridge.call(appContext, "SET_TIME", targetMillis.toString())
+
+            val reply = TimePrivilegedBridge.setTime(targetMillis)
             val outcome = if (reply.success) {
                 SystemCommandOutcome(true, "OK: автоматическое время выключено, системные часы установлены.")
             } else {
-                TimeShellBridge.markInactive(appContext)
                 SystemCommandOutcome(false, "Системный сервис не выполнил изменение времени: ${compact(reply.detail)}")
             }
             lastDetail = outcome.detail
@@ -83,17 +86,16 @@ object TimeLocalAdbController {
     fun setAutomaticTime(context: Context, enabled: Boolean, callback: (SystemCommandOutcome) -> Unit) {
         executor.execute {
             val appContext = context.applicationContext
-            val access = ensureShellServer(appContext)
+            val access = ensurePrivilegedServer(appContext)
             if (!access.isSuccess) {
                 deliver(callback, access)
                 return@execute
             }
-            val expected = if (enabled) "1" else "0"
-            val reply = TimeShellBridge.call(appContext, "AUTO_TIME", expected)
+
+            val reply = TimePrivilegedBridge.setAutomaticTime(enabled)
             val outcome = if (reply.success) {
                 SystemCommandOutcome(true, "OK: автоматическая синхронизация времени ${if (enabled) "включена" else "выключена"}.")
             } else {
-                TimeShellBridge.markInactive(appContext)
                 SystemCommandOutcome(false, "Системный сервис не изменил синхронизацию времени: ${compact(reply.detail)}")
             }
             lastDetail = outcome.detail
@@ -128,7 +130,7 @@ object TimeLocalAdbController {
 
         return runCatching {
             val manager = TimeLocalAdbConnectionManager.getInstance(context)
-            TimeShellBridge.markInactive(context)
+            TimePrivilegedBridge.clear()
             if (manager.isConnected) manager.disconnect()
             if (!manager.pair(host, port, code)) {
                 SystemCommandOutcome(false, "Android отклонил код сопряжения. Проверьте код и повторите попытку.")
@@ -137,35 +139,36 @@ object TimeLocalAdbController {
                 if (!connected) {
                     SystemCommandOutcome(false, "Сопряжение выполнено, но ADB-подключение не установлено.")
                 } else {
-                    startShellServer(context, manager)
+                    startPrivilegedServer(context, manager)
                 }
             }
         }.getOrElse { SystemCommandOutcome(false, "Сопряжение не выполнено: ${it.message.orEmpty()}") }
     }
 
-    private fun ensureShellServer(context: Context): SystemCommandOutcome {
+    private fun ensurePrivilegedServer(context: Context): SystemCommandOutcome {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             val outcome = SystemCommandOutcome(false, "Встроенный системный доступ требует Android 11 или новее.")
             lastDetail = outcome.detail
             return outcome
         }
 
-        val existing = TimeShellBridge.ping(context)
-        if (existing.success && existing.detail.contains("uid=2000")) {
-            TimeShellBridge.markActive(context)
-            val outcome = SystemCommandOutcome(true, "Системный сервис активен до перезагрузки телефона.")
-            lastDetail = outcome.detail
-            return outcome
+        // On a fresh app process the existing server needs a moment to send its
+        // Binder through TimeBinderProvider. Do not touch ADB during this wait.
+        val existing = awaitBinder(3_500)
+        if (existing.isSuccess) {
+            lastDetail = existing.detail
+            return existing
         }
-        TimeShellBridge.markInactive(context)
 
         val outcome = runCatching {
             val manager = TimeLocalAdbConnectionManager.getInstance(context)
             if (!manager.isConnected) {
                 val connected = manager.autoConnect(context, 8_000) || manager.isConnected
-                if (!connected) return@runCatching SystemCommandOutcome(false, "Не удалось подключиться к беспроводной отладке для запуска системного сервиса.")
+                if (!connected) {
+                    return@runCatching SystemCommandOutcome(false, "Системный сервер не найден. Для его запуска после перезагрузки телефона требуется беспроводная отладка.")
+                }
             }
-            startShellServer(context, manager)
+            startPrivilegedServer(context, manager)
         }.recover { failure ->
             when (failure) {
                 is AdbPairingRequiredException -> SystemCommandOutcome(false, "Требуется однократное сопряжение с беспроводной отладкой.")
@@ -176,29 +179,55 @@ object TimeLocalAdbController {
         return outcome
     }
 
-    private fun startShellServer(context: Context, manager: TimeLocalAdbConnectionManager): SystemCommandOutcome {
+    private fun startPrivilegedServer(context: Context, manager: TimeLocalAdbConnectionManager): SystemCommandOutcome {
         val packageName = context.packageName
-        val className = "$packageName.timeaccessibility.TimeShellServerEntry"
-        val token = TimeShellBridge.token(context)
-        val port = TimeShellBridge.PORT
-        val logPath = "/data/local/tmp/time_machine_shell.log"
-        val command = "APK=${'$'}(pm path $packageName | head -n 1 | cut -d: -f2); if [ -z \"${'$'}APK\" ]; then echo APK_NOT_FOUND; exit 21; fi; OLD=${'$'}(pidof time_machine_shell); if [ -n \"${'$'}OLD\" ]; then kill ${'$'}OLD >/dev/null 2>&1; sleep 1; fi; rm -f $logPath; CLASSPATH=\"${'$'}APK\" /system/bin/toybox setsid -d /system/bin/app_process -Djava.class.path=\"${'$'}APK\" /system/bin --nice-name=time_machine_shell $className $token $port </dev/null >$logPath 2>&1 & sleep 1; PID=${'$'}(pidof time_machine_shell); echo STARTED pid=${'$'}PID; if [ -f $logPath ]; then /system/bin/toybox tail -c 1200 $logPath; fi"
-        val launch = runAdbShell(manager, command)
-        if (launch.exitCode != 0 || !launch.stdout.contains("STARTED")) {
-            return SystemCommandOutcome(false, "Не удалось запустить системный shell-сервис: ${compact(launch.describe())}")
+        val authority = "$packageName.timebridge"
+        val className = "$packageName.timeaccessibility.TimePrivilegedServer"
+        val appUid = context.applicationInfo.uid
+        val apkPath = context.applicationInfo.sourceDir
+        val starterPath = "${context.applicationInfo.nativeLibraryDir}/libtime_machine_starter.so"
+
+        TimePrivilegedBridge.clear()
+
+        val command = buildString {
+            append("OLD=${'$'}(pidof time_machine_server 2>/dev/null); ")
+            append("if [ -n \"${'$'}OLD\" ]; then kill ${'$'}OLD >/dev/null 2>&1; sleep 1; fi; ")
+            append("STARTER=").append(shellQuote(starterPath)).append("; ")
+            append("if [ ! -x \"${'$'}STARTER\" ]; then echo STARTER_NOT_EXECUTABLE; ls -l \"${'$'}STARTER\" 2>&1; exit 22; fi; ")
+            append("\"${'$'}STARTER\" ")
+            append("--apk=").append(shellQuote(apkPath)).append(' ')
+            append("--class=").append(shellQuote(className)).append(' ')
+            append("--name=time_machine_server ")
+            append("--package=").append(shellQuote(packageName)).append(' ')
+            append("--authority=").append(shellQuote(authority)).append(' ')
+            append("--app-uid=").append(appUid)
         }
 
-        repeat(25) {
-            Thread.sleep(200)
-            val ping = TimeShellBridge.ping(context)
-            if (ping.success && ping.detail.contains("uid=2000")) {
-                TimeShellBridge.markActive(context)
-                runCatching { if (manager.isConnected) manager.disconnect() }
-                return SystemCommandOutcome(true, "Системный сервис запущен. Повторное сопряжение до перезагрузки телефона не требуется.")
-            }
+        val launch = runAdbShell(manager, command)
+        if (launch.exitCode != 0 || !launch.stdout.contains("time_machine_starter exit with 0")) {
+            return SystemCommandOutcome(false, "Не удалось запустить системный сервер: ${compact(launch.describe())}")
         }
-        TimeShellBridge.markInactive(context)
-        return SystemCommandOutcome(false, "Системный процесс не открыл локальный канал. Диагностика запуска: ${compact(launch.stdout)}")
+
+        val ready = awaitBinder(8_000)
+        if (ready.isSuccess) {
+            runCatching { if (manager.isConnected) manager.disconnect() }
+            return SystemCommandOutcome(true, "Системный сервис запущен. До перезагрузки телефона ADB больше не требуется.")
+        }
+
+        return SystemCommandOutcome(false, "Native starter запустился, но Binder от системного сервера не получен. ${compact(launch.stdout)}")
+    }
+
+    private fun awaitBinder(timeoutMillis: Long): SystemCommandOutcome {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMillis
+        do {
+            val ping = TimePrivilegedBridge.ping()
+            if (ping.success && ping.detail.contains("uid=2000")) {
+                return SystemCommandOutcome(true, "Системный сервис активен до перезагрузки телефона.")
+            }
+            if (timeoutMillis <= 0) break
+            Thread.sleep(150)
+        } while (SystemClock.elapsedRealtime() < deadline)
+        return SystemCommandOutcome(false, "Системный Binder не получен.")
     }
 
     private fun runAdbShell(manager: TimeLocalAdbConnectionManager, command: String): CommandResult {
@@ -208,11 +237,11 @@ object TimeLocalAdbController {
             val stream = manager.openStream("shell:$request")
             val future = readerExecutor.submit<String> { stream.openInputStream().bufferedReader().use { it.readText() } }
             val raw = try {
-                future.get(9, TimeUnit.SECONDS)
+                future.get(10, TimeUnit.SECONDS)
             } catch (_: Throwable) {
                 runCatching { stream.close() }
                 future.cancel(true)
-                return CommandResult(-1, "", "тайм-аут запуска shell-сервиса")
+                return CommandResult(-1, "", "тайм-аут запуска native starter")
             }
             runCatching { stream.close() }
             val markerIndex = raw.lastIndexOf(marker)
@@ -222,7 +251,8 @@ object TimeLocalAdbController {
         }.getOrElse { CommandResult(-1, "", it.message.orEmpty()) }
     }
 
-    private fun compact(value: String): String = value.replace(Regex("\\s+"), " ").trim().take(500)
+    private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
+    private fun compact(value: String): String = value.replace(Regex("\\s+"), " ").trim().take(700)
     private fun deliver(callback: (SystemCommandOutcome) -> Unit, outcome: SystemCommandOutcome) { mainHandler.post { callback(outcome) } }
 
     private data class CommandResult(val exitCode: Int, val stdout: String, val stderr: String) {
