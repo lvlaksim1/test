@@ -32,11 +32,14 @@ object TimeLocalAdbController {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return SystemAccessState(false, "Встроенный системный доступ требует Android 11 или новее.")
         }
-        return if (TimeShellBridge.isLikelyActive(context)) {
-            SystemAccessState(true, "Системный сервис активен до перезагрузки телефона.")
-        } else {
-            SystemAccessState(false, lastDetail)
+        if (TimeShellBridge.isLikelyActive(context)) {
+            val ping = TimeShellBridge.ping(context)
+            if (ping.success && ping.detail.contains("uid=2000")) {
+                return SystemAccessState(true, "Системный сервис активен до перезагрузки телефона.")
+            }
+            TimeShellBridge.markInactive(context)
         }
+        return SystemAccessState(false, lastDetail)
     }
 
     fun connect(context: Context, callback: (SystemCommandOutcome) -> Unit) {
@@ -175,16 +178,17 @@ object TimeLocalAdbController {
 
     private fun startShellServer(context: Context, manager: TimeLocalAdbConnectionManager): SystemCommandOutcome {
         val packageName = context.packageName
-        val className = "$packageName.timeaccessibility.TimeShellServer"
+        val className = "$packageName.timeaccessibility.TimeShellServerEntry"
         val token = TimeShellBridge.token(context)
         val port = TimeShellBridge.PORT
-        val command = "APK=${'$'}(pm path $packageName | head -n 1 | cut -d: -f2); if [ -z \"${'$'}APK\" ]; then echo APK_NOT_FOUND; exit 21; fi; OLD=${'$'}(pidof time_machine_shell); if [ -n \"${'$'}OLD\" ]; then kill ${'$'}OLD >/dev/null 2>&1; sleep 1; fi; (CLASSPATH=\"${'$'}APK\" /system/bin/app_process /system/bin --nice-name=time_machine_shell $className $token $port </dev/null >/dev/null 2>&1 &); echo STARTED"
+        val logPath = "/data/local/tmp/time_machine_shell.log"
+        val command = "APK=${'$'}(pm path $packageName | head -n 1 | cut -d: -f2); if [ -z \"${'$'}APK\" ]; then echo APK_NOT_FOUND; exit 21; fi; OLD=${'$'}(pidof time_machine_shell); if [ -n \"${'$'}OLD\" ]; then kill ${'$'}OLD >/dev/null 2>&1; sleep 1; fi; rm -f $logPath; CLASSPATH=\"${'$'}APK\" /system/bin/toybox setsid -d /system/bin/app_process -Djava.class.path=\"${'$'}APK\" /system/bin --nice-name=time_machine_shell $className $token $port </dev/null >$logPath 2>&1 & sleep 1; PID=${'$'}(pidof time_machine_shell); echo STARTED pid=${'$'}PID; if [ -f $logPath ]; then /system/bin/toybox tail -c 1200 $logPath; fi"
         val launch = runAdbShell(manager, command)
         if (launch.exitCode != 0 || !launch.stdout.contains("STARTED")) {
             return SystemCommandOutcome(false, "Не удалось запустить системный shell-сервис: ${compact(launch.describe())}")
         }
 
-        repeat(15) {
+        repeat(25) {
             Thread.sleep(200)
             val ping = TimeShellBridge.ping(context)
             if (ping.success && ping.detail.contains("uid=2000")) {
@@ -194,7 +198,7 @@ object TimeLocalAdbController {
             }
         }
         TimeShellBridge.markInactive(context)
-        return SystemCommandOutcome(false, "ADB-команда запуска выполнена, но системный сервис не открыл локальный канал.")
+        return SystemCommandOutcome(false, "Системный процесс не открыл локальный канал. Диагностика запуска: ${compact(launch.stdout)}")
     }
 
     private fun runAdbShell(manager: TimeLocalAdbConnectionManager, command: String): CommandResult {
@@ -204,7 +208,7 @@ object TimeLocalAdbController {
             val stream = manager.openStream("shell:$request")
             val future = readerExecutor.submit<String> { stream.openInputStream().bufferedReader().use { it.readText() } }
             val raw = try {
-                future.get(7, TimeUnit.SECONDS)
+                future.get(9, TimeUnit.SECONDS)
             } catch (_: Throwable) {
                 runCatching { stream.close() }
                 future.cancel(true)
@@ -218,7 +222,7 @@ object TimeLocalAdbController {
         }.getOrElse { CommandResult(-1, "", it.message.orEmpty()) }
     }
 
-    private fun compact(value: String): String = value.replace(Regex("\\s+"), " ").trim().take(300)
+    private fun compact(value: String): String = value.replace(Regex("\\s+"), " ").trim().take(500)
     private fun deliver(callback: (SystemCommandOutcome) -> Unit, outcome: SystemCommandOutcome) { mainHandler.post { callback(outcome) } }
 
     private data class CommandResult(val exitCode: Int, val stdout: String, val stderr: String) {
