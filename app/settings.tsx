@@ -1,37 +1,13 @@
-import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
-import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
-import {
-  enableWifiViaLocalAdb,
-  openDateTimeSettings,
-  openDeveloperSettings,
-  prepareLocalAdbDiagnostic,
-  testLocalAdbWithoutWifi,
-  type LocalAdbDiagnostic,
-} from "@/lib/time-control";
+import { openDateTimeSettings, openDeveloperSettings } from "@/lib/time-control";
 
 export default function SettingsScreen() {
   const colors = useColors();
   const router = useRouter();
-  const [busy, setBusy] = useState<string | null>(null);
-  const [diagnostic, setDiagnostic] = useState("");
-
-  const runDiagnostic = async (name: string, action: () => Promise<LocalAdbDiagnostic>) => {
-    if (busy) return;
-    setBusy(name);
-    try {
-      const result = await action();
-      setDiagnostic(`${result.success ? "OK" : "ОШИБКА"}\n${result.detail}`);
-    } catch (error) {
-      setDiagnostic(`ОШИБКА\n${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setBusy(null);
-    }
-  };
 
   return (
     <ScreenContainer edges={["top", "left", "right", "bottom"]} containerClassName="bg-background">
@@ -60,44 +36,9 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
-        <View style={[styles.experimentCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <Text style={[styles.experimentTitle, { color: colors.text }]}>Локальный ADB — эксперимент</Text>
-          <Text style={[styles.experimentHint, { color: colors.muted }]}>
-            Сначала подключите обычный системный доступ по беспроводной отладке. Первый тест переводит adbd на TCP-порт 5555 и пытается переподключиться к 127.0.0.1. Второй тест сам отключает Wi-Fi и проверяет повторное локальное подключение.
-          </Text>
-
-          <Pressable
-            disabled={Boolean(busy)}
-            onPress={() => void runDiagnostic("prepare", prepareLocalAdbDiagnostic)}
-            style={[styles.actionButton, { backgroundColor: colors.primary, opacity: busy ? 0.55 : 1 }]}
-          >
-            <Text style={styles.actionText}>{busy === "prepare" ? "Выполняется…" : "1. Подготовить 127.0.0.1:5555"}</Text>
-          </Pressable>
-
-          <Pressable
-            disabled={Boolean(busy)}
-            onPress={() => void runDiagnostic("wifiOff", testLocalAdbWithoutWifi)}
-            style={[styles.actionButton, { backgroundColor: colors.primary, opacity: busy ? 0.55 : 1 }]}
-          >
-            <Text style={styles.actionText}>{busy === "wifiOff" ? "Выполняется…" : "2. Отключить Wi-Fi и проверить"}</Text>
-          </Pressable>
-
-          <Pressable
-            disabled={Boolean(busy)}
-            onPress={() => void runDiagnostic("wifiOn", enableWifiViaLocalAdb)}
-            style={[styles.secondaryButton, { borderColor: colors.primary, opacity: busy ? 0.55 : 1 }]}
-          >
-            <Text style={[styles.secondaryText, { color: colors.primary }]}>{busy === "wifiOn" ? "Выполняется…" : "Включить Wi-Fi через ADB"}</Text>
-          </Pressable>
-
-          {diagnostic ? (
-            <View style={[styles.logBox, { borderColor: colors.border }]}>
-              <Text selectable style={[styles.logText, { color: colors.text }]}>{diagnostic}</Text>
-              <Pressable onPress={() => void Clipboard.setStringAsync(diagnostic)} style={styles.copyButton}>
-                <Text style={[styles.copyText, { color: colors.primary }]}>Копировать результат</Text>
-              </Pressable>
-            </View>
-          ) : null}
+        <View style={[styles.infoCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[styles.infoTitle, { color: colors.text }]}>Системный сервис</Text>
+          <Text style={[styles.infoText, { color: colors.muted }]}>После первого сопряжения служебный процесс продолжает работать независимо от «Машины времени». Закрытие и повторный запуск приложения не требуют нового подключения. После перезагрузки телефона сервис нужно запустить снова.</Text>
         </View>
       </ScrollView>
     </ScreenContainer>
@@ -116,15 +57,7 @@ const styles = StyleSheet.create({
   rowTitle: { fontSize: 16, fontWeight: "800" },
   rowHint: { fontSize: 12, marginTop: 4 },
   chevron: { fontSize: 28, fontWeight: "700" },
-  experimentCard: { marginHorizontal: 16, marginTop: 16, borderWidth: 1, borderRadius: 14, padding: 16 },
-  experimentTitle: { fontSize: 17, fontWeight: "800" },
-  experimentHint: { fontSize: 13, lineHeight: 19, marginTop: 8, marginBottom: 14 },
-  actionButton: { minHeight: 48, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 12, marginTop: 8 },
-  actionText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800", textAlign: "center" },
-  secondaryButton: { minHeight: 46, borderWidth: 1, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 12, marginTop: 8 },
-  secondaryText: { fontSize: 14, fontWeight: "800", textAlign: "center" },
-  logBox: { marginTop: 14, borderWidth: 1, borderRadius: 10, padding: 12 },
-  logText: { fontSize: 12, lineHeight: 18 },
-  copyButton: { alignSelf: "flex-start", marginTop: 10, paddingVertical: 5 },
-  copyText: { fontSize: 13, fontWeight: "800" },
+  infoCard: { marginHorizontal: 16, marginTop: 16, borderWidth: 1, borderRadius: 14, padding: 16 },
+  infoTitle: { fontSize: 17, fontWeight: "800" },
+  infoText: { fontSize: 13, lineHeight: 19, marginTop: 8 },
 });
