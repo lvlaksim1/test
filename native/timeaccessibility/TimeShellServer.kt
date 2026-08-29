@@ -20,6 +20,10 @@ object TimeShellServer {
         val port = args[1].toIntOrNull() ?: return
         if (token.length != 64 || port !in 1024..65535 || Process.myUid() != 2000) return
 
+        // Detach from the adb-shell session when the platform exposes setsid().
+        // Failure is harmless because stdin/stdout/stderr are already redirected by the launcher.
+        runCatching { Class.forName("android.system.Os").getMethod("setsid").invoke(null) }
+
         val server = ServerSocket()
         server.reuseAddress = true
         server.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 8)
