@@ -3,7 +3,9 @@ name: Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "work-*"
     paths:
       - "app.config.ts"
       - "eas.json"
@@ -19,6 +21,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-apk:
     name: Build installable Android APK
@@ -28,6 +34,24 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Read app version
+        id: app_version
+        shell: bash
+        run: |
+          VERSION=$(sed -nE 's/.*version:[[:space:]]*"([^"]+)".*/\1/p' app.config.ts | head -n1)
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Reject an already used release version
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          TAG="v${{ steps.app_version.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Release tag ${TAG} already exists. Increase the app version before publishing from main."
+            exit 1
+          fi
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -61,19 +85,19 @@ jobs:
       - name: Build release APK
         run: cd android && ./gradlew :app:assembleRelease --no-daemon
 
-      - name: Read app version
-        id: app_version
-        shell: bash
-        run: |
-          VERSION=$(grep -m1 'version: "' app.config.ts | sed -E 's/.*version: "([^"]+)".*/\1/')
-          test -n "$VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Prepare APK file
         shell: bash
         run: cp android/app/build/outputs/apk/release/app-release.apk "time-machine-${{ steps.app_version.outputs.version }}.apk"
 
+      - name: Upload APK build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: time-machine-${{ steps.app_version.outputs.version }}-${{ github.run_number }}
+          path: time-machine-${{ steps.app_version.outputs.version }}.apk
+          if-no-files-found: error
+
       - name: Publish APK release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.app_version.outputs.version }}
@@ -81,4 +105,3 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: time-machine-${{ steps.app_version.outputs.version }}.apk
           generate_release_notes: true
-          overwrite_files: true
