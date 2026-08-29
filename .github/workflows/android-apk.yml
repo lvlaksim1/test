@@ -69,19 +69,7 @@ jobs:
         run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install JavaScript dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Refresh dependency lockfile on refactor branch
-        if: github.ref == 'refs/heads/work-v140-refactor'
-        shell: bash
-        run: |
-          if ! git diff --quiet -- pnpm-lock.yaml; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add pnpm-lock.yaml
-            git commit -m "Refresh dependency lockfile [skip ci]"
-            git push origin HEAD:${GITHUB_REF_NAME}
-          fi
+        run: pnpm install --frozen-lockfile
 
       - name: Run unit tests
         run: pnpm test
