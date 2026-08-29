@@ -2,7 +2,6 @@ import { NativeModules, Platform } from "react-native";
 import type { CycleConfig } from "@/lib/cycle-utils";
 
 export type CycleEvent = { at: number; message: string };
-export type LocalAdbDiagnostic = { success: boolean; detail: string };
 export type TimeControlStatus = {
   isSystemAccessReady: boolean;
   systemAccessDetail: string;
@@ -19,9 +18,6 @@ type NativeTimeControl = {
   getStatus: () => Promise<TimeControlStatus>;
   connectSystemAccess: () => Promise<TimeControlStatus>;
   pairSystemAccess: (pairingCode: string) => Promise<TimeControlStatus>;
-  prepareLocalAdbDiagnostic: () => Promise<LocalAdbDiagnostic>;
-  testLocalAdbWithoutWifi: () => Promise<LocalAdbDiagnostic>;
-  enableWifiViaLocalAdb: () => Promise<LocalAdbDiagnostic>;
   openDeveloperSettings: () => Promise<boolean>;
   openDateTimeSettings: () => Promise<boolean>;
   setAutomaticTime: (enabled: boolean) => Promise<TimeControlStatus>;
@@ -53,9 +49,6 @@ function requireNative(): NativeTimeControl {
 export async function getTimeControlStatus() { return nativeModule ? nativeModule.getStatus() : webStatus; }
 export async function connectSystemAccess() { return requireNative().connectSystemAccess(); }
 export async function pairSystemAccess(code: string) { return requireNative().pairSystemAccess(code); }
-export async function prepareLocalAdbDiagnostic() { return requireNative().prepareLocalAdbDiagnostic(); }
-export async function testLocalAdbWithoutWifi() { return requireNative().testLocalAdbWithoutWifi(); }
-export async function enableWifiViaLocalAdb() { return requireNative().enableWifiViaLocalAdb(); }
 export async function openDeveloperSettings() { return requireNative().openDeveloperSettings(); }
 export async function openDateTimeSettings() { return requireNative().openDateTimeSettings(); }
 export async function setAutomaticTime(enabled: boolean) { return requireNative().setAutomaticTime(enabled); }
