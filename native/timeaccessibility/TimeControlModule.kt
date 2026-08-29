@@ -36,17 +36,17 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
 
     @ReactMethod
     fun prepareLocalAdbDiagnostic(promise: Promise) {
-        TimeLocalAdbController.prepareLocalAdb(context) { outcome -> promise.resolve(diagnosticResult(outcome)) }
+        TimeLocalAdbExperiment.prepare(context) { outcome -> promise.resolve(diagnosticResult(outcome)) }
     }
 
     @ReactMethod
     fun testLocalAdbWithoutWifi(promise: Promise) {
-        TimeLocalAdbController.testLocalAdbWithoutWifi(context) { outcome -> promise.resolve(diagnosticResult(outcome)) }
+        TimeLocalAdbExperiment.testWithoutWifi(context) { outcome -> promise.resolve(diagnosticResult(outcome)) }
     }
 
     @ReactMethod
     fun enableWifiViaLocalAdb(promise: Promise) {
-        TimeLocalAdbController.enableWifiViaLocalAdb(context) { outcome -> promise.resolve(diagnosticResult(outcome)) }
+        TimeLocalAdbExperiment.enableWifi(context) { outcome -> promise.resolve(diagnosticResult(outcome)) }
     }
 
     @ReactMethod
