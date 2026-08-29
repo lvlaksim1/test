@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const PLUGIN_NAME = "with-time-bridge";
-const PLUGIN_VERSION = "1.0.1";
+const PLUGIN_VERSION = "1.0.2";
 
 function withTimeBridge(config) {
   config = withAndroidManifest(config, (mod) => {
@@ -119,7 +119,8 @@ function withTimeBridge(config) {
       "TimeCycleStore.kt",
       "TimeLocalAdbConnectionManager.kt",
       "TimeLocalAdbController.kt",
-      "TimeLocalAdbExperiment.kt",
+      "TimeShellBridge.kt",
+      "TimeShellServer.kt",
       "TimeCycleRunner.kt",
       "TimeCycleForegroundService.kt",
       "TimePairingService.kt",
