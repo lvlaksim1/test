@@ -1,12 +1,7 @@
-import { Colors, type ColorScheme, type ThemeColorPalette } from "@/constants/theme";
-import { useColorScheme } from "./use-color-scheme";
+import { useColorScheme } from "react-native";
 
-/**
- * Returns the current theme's color palette.
- * Usage: const colors = useColors(); then colors.text, colors.background, etc.
- */
-export function useColors(colorSchemeOverride?: ColorScheme): ThemeColorPalette {
-  const colorSchema = useColorScheme();
-  const scheme = (colorSchemeOverride ?? colorSchema ?? "light") as ColorScheme;
-  return Colors[scheme];
+import { Colors, type ThemeColorPalette } from "@/constants/theme";
+
+export function useColors(): ThemeColorPalette {
+  return Colors[useColorScheme() === "dark" ? "dark" : "light"];
 }

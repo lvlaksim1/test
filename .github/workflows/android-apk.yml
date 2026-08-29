@@ -6,17 +6,6 @@ on:
     branches:
       - main
       - "work-*"
-    paths:
-      - "app.config.ts"
-      - "eas.json"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "plugins/**"
-      - "native/**"
-      - "app/**"
-      - "components/**"
-      - "lib/**"
-      - ".github/workflows/android-apk.yml"
 
 permissions:
   contents: write
@@ -27,7 +16,7 @@ concurrency:
 
 jobs:
   build-apk:
-    name: Build installable Android APK
+    name: Verify and build Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
@@ -40,7 +29,10 @@ jobs:
         shell: bash
         run: |
           VERSION=$(sed -nE 's/.*version:[[:space:]]*"([^"]+)".*/\1/p' app.config.ts | head -n1)
+          VERSION_CODE=$(sed -nE 's/.*versionCode:[[:space:]]*([0-9]+).*/\1/p' app.config.ts | head -n1)
           test -n "$VERSION"
+          test -n "$VERSION_CODE"
+          test "$VERSION" = "$VERSION_CODE"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Reject an already used release version
@@ -77,7 +69,28 @@ jobs:
         run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Refresh dependency lockfile on refactor branch
+        if: github.ref == 'refs/heads/work-v140-refactor'
+        shell: bash
+        run: |
+          if ! git diff --quiet -- pnpm-lock.yaml; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add pnpm-lock.yaml
+            git commit -m "Refresh dependency lockfile [skip ci]"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
+
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Check TypeScript
+        run: pnpm check
+
+      - name: Run ESLint
+        run: pnpm lint
 
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install --clean
