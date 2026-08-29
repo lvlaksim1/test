@@ -119,6 +119,7 @@ function withTimeBridge(config) {
       "TimeCycleStore.kt",
       "TimeLocalAdbConnectionManager.kt",
       "TimeLocalAdbController.kt",
+      "TimeLocalAdbExperiment.kt",
       "TimeCycleRunner.kt",
       "TimeCycleForegroundService.kt",
       "TimePairingService.kt",
