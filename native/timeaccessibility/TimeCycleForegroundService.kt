@@ -38,7 +38,7 @@ class TimeCycleForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        TimeCycleRunner.start(applicationContext)
+        TimeShizukuCycleRunner.start(applicationContext)
         return START_STICKY
     }
 

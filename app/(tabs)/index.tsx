@@ -10,11 +10,9 @@ import { type CycleForm, formatDateTime, getDefaultForm, parseCycleForm, toFormS
 import { formatJournalForCopy } from "@/lib/journal-export";
 import {
   clearTimeEvents,
-  connectSystemAccess,
   getTimeControlStatus,
   isNativeTimeControlAvailable,
-  openDeveloperSettings,
-  pairSystemAccess,
+  requestShizukuPermission,
   setAutomaticTime,
   startTimeCycle,
   stopTimeCycle,
@@ -26,8 +24,8 @@ const CONFIGURATIONS_STORAGE_KEY = "time-machine-configurations-v1";
 const ACTIVE_CONFIGURATION_STORAGE_KEY = "time-machine-active-configuration-v1";
 
 const initialStatus: TimeControlStatus = {
-  isSystemAccessReady: false,
-  systemAccessDetail: "Системный доступ не подключён.",
+  isShizukuRunning: false,
+  isShizukuPermissionGranted: false,
   isAutomaticTimeEnabled: true,
   isRunning: false,
   completedCycles: 0,
@@ -118,9 +116,6 @@ export default function HomeScreen() {
   const [form, setForm] = useState<CycleForm>(() => getDefaultForm());
   const [status, setStatus] = useState<TimeControlStatus>(initialStatus);
   const [isBusy, setIsBusy] = useState(false);
-  const [isAccessBusy, setIsAccessBusy] = useState(false);
-  const [isPairingDialogVisible, setIsPairingDialogVisible] = useState(false);
-  const [pairingCode, setPairingCode] = useState("");
   const [isLogExpanded, setIsLogExpanded] = useState(false);
   const [isConfigurationsExpanded, setIsConfigurationsExpanded] = useState(false);
   const [configurations, setConfigurations] = useState<SavedConfiguration[]>([]);
@@ -129,7 +124,7 @@ export default function HomeScreen() {
   const [configurationNameDraft, setConfigurationNameDraft] = useState("");
 
   const refreshStatus = useCallback(async () => {
-    try { setStatus(await getTimeControlStatus()); } catch { /* Native service may be restarting. */ }
+    try { setStatus(await getTimeControlStatus()); } catch { /* Shizuku may be restarting. */ }
   }, []);
 
   const persistForm = useCallback((updater: (previous: CycleForm) => CycleForm) => {
@@ -156,9 +151,6 @@ export default function HomeScreen() {
     }).catch(() => undefined);
 
     void refreshStatus();
-    if (isNativeTimeControlAvailable) {
-      void connectSystemAccess().then(setStatus).catch(() => undefined);
-    }
   }, [refreshStatus]);
 
   useEffect(() => {
@@ -182,7 +174,7 @@ export default function HomeScreen() {
   }, [persistForm, status.lastAppliedMillis]);
 
   const parsed = useMemo(() => parseCycleForm(form), [form]);
-  const systemAccessReady = status.isSystemAccessReady;
+  const shizukuReady = status.isShizukuRunning && status.isShizukuPermissionGranted;
   const running = status.isRunning;
   const repeatsPerSeries = parsed.config?.repeatsPerSeries ?? 1;
   const totalSeries = parsed.config?.totalSeries ?? 1;
@@ -216,51 +208,19 @@ export default function HomeScreen() {
     }, 250);
   };
 
-  const handleSystemAccess = async () => {
-    if (systemAccessReady || isAccessBusy) return;
-    setIsAccessBusy(true);
+  const handleRequestShizuku = async () => {
     try {
-      setStatus(await connectSystemAccess());
-      if (Platform.OS !== "web") await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch {
-      setPairingCode("");
-      setIsPairingDialogVisible(true);
-    } finally {
-      setIsAccessBusy(false);
-    }
-  };
-
-  const handleOpenDeveloperSettings = async () => {
-    try {
-      await openDeveloperSettings();
+      const granted = await requestShizukuPermission();
+      await refreshStatus();
+      if (!granted) Alert.alert("Подтвердите Shizuku", "В Shizuku должна быть запущена служба. Затем подтвердите доступ для «Машины времени».");
     } catch (error) {
-      Alert.alert("Не удалось открыть настройки", error instanceof Error ? error.message : "Откройте настройки разработчика вручную.");
-    }
-  };
-
-  const handlePairSystemAccess = async () => {
-    const code = pairingCode.trim();
-    if (!/^\d{6}$/.test(code)) {
-      Alert.alert("Проверьте код", "Введите шестизначный код сопряжения из окна беспроводной отладки.");
-      return;
-    }
-    setIsAccessBusy(true);
-    try {
-      const nextStatus = await pairSystemAccess(code);
-      setStatus(nextStatus);
-      setIsPairingDialogVisible(false);
-      setPairingCode("");
-      if (Platform.OS !== "web") await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (error) {
-      Alert.alert("Сопряжение не выполнено", error instanceof Error ? error.message : "Проверьте беспроводную отладку и код сопряжения.");
-    } finally {
-      setIsAccessBusy(false);
+      Alert.alert("Shizuku недоступен", error instanceof Error ? error.message : "Установите и запустите Shizuku через беспроводную отладку.");
     }
   };
 
   const handleAutomaticTime = async (enabledValue: boolean) => {
-    if (!systemAccessReady) {
-      Alert.alert("Нужен системный доступ", "Нажмите строку «Системный доступ» и выполните сопряжение через беспроводную отладку.");
+    if (!shizukuReady) {
+      Alert.alert("Нужен Shizuku", "Сначала запустите Shizuku и выдайте доступ приложению.");
       return;
     }
     setIsBusy(true);
@@ -274,13 +234,13 @@ export default function HomeScreen() {
 
   const handleStart = async () => {
     if (!parsed.config) { Alert.alert("Проверьте параметры", parsed.error ?? "Заполните поля."); return; }
-    if (!systemAccessReady) { Alert.alert("Нужен системный доступ", "Подключите системный доступ через беспроводную отладку."); return; }
+    if (!shizukuReady) { Alert.alert("Нужен Shizuku", "Запустите Shizuku и нажмите строку «Shizuku» в приложении, чтобы выдать доступ."); return; }
     setIsBusy(true);
     try {
       setStatus(await startTimeCycle(parsed.config));
       if (Platform.OS !== "web") await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
-      Alert.alert("Запуск не выполнен", error instanceof Error ? error.message : "Не удалось запустить цикл.");
+      Alert.alert("Запуск не выполнен", error instanceof Error ? error.message : "Не удалось запустить цикл Shizuku.");
     } finally { setIsBusy(false); }
   };
 
@@ -376,7 +336,7 @@ export default function HomeScreen() {
     try {
       await AsyncStorage.setItem(ACTIVE_CONFIGURATION_STORAGE_KEY, configuration.name);
       if (Platform.OS !== "web") await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {
+    } catch (error) {
       Alert.alert("Конфигурация загружена", "Параметры применены, но имя текущей конфигурации не удалось сохранить.");
     }
   };
@@ -396,24 +356,19 @@ export default function HomeScreen() {
             </View>
           )}
 
-          <View style={[styles.systemAccessCard, { backgroundColor: colors.surface, borderColor: systemAccessReady ? colors.success : colors.warning }]}>
-            <Pressable disabled={isAccessBusy || running || !isNativeTimeControlAvailable} onPress={handleSystemAccess} style={({ pressed }) => [styles.accessButton, { borderColor: systemAccessReady ? colors.success : colors.border }, (pressed || isAccessBusy || running) && styles.pressed]}>
-              <View style={styles.accessTextWrap}>
-                <Text style={[styles.accessButtonText, { color: systemAccessReady ? colors.success : colors.text }]}>
-                  {systemAccessReady ? "Системный доступ: активен" : isAccessBusy ? "Системный доступ: подключение…" : "Системный доступ: подключить"}
-                </Text>
-                <Text style={[styles.accessHint, { color: colors.muted }]} numberOfLines={2}>
-                  {systemAccessReady ? "Встроенное подключение через беспроводную отладку" : status.systemAccessDetail}
-                </Text>
-              </View>
-              <Text style={[styles.accessChevron, { color: colors.primary }]}>›</Text>
+          <View style={[styles.shizukuCard, { backgroundColor: colors.surface, borderColor: shizukuReady ? colors.success : colors.warning }]}>
+            <Pressable onPress={handleRequestShizuku} style={({ pressed }) => [styles.syncButton, { borderColor: shizukuReady ? colors.success : colors.border }, pressed && styles.pressed]}>
+              <Text style={[styles.syncButtonText, { color: shizukuReady ? colors.success : colors.muted }]}>
+                {shizukuReady ? "Shizuku: доступ выдан" : status.isShizukuRunning ? "Shizuku: разрешить доступ" : "Shizuku: запустите службу"}
+              </Text>
+              <Text style={[styles.syncChevron, { color: colors.primary }]}>›</Text>
             </Pressable>
             <View style={[styles.automaticTimeRow, { borderTopColor: colors.border }]}>
               <View style={styles.automaticTimeText}>
                 <Text style={[styles.automaticTimeTitle, { color: colors.text }]}>Синхронизация времени</Text>
                 <Text style={[styles.automaticTimeHint, { color: colors.muted }]}>Получать дату и время из сети</Text>
               </View>
-              <Switch value={status.isAutomaticTimeEnabled} onValueChange={handleAutomaticTime} disabled={isBusy || running || !isNativeTimeControlAvailable || !systemAccessReady} trackColor={{ false: colors.border, true: colors.success }} thumbColor={status.isAutomaticTimeEnabled ? "#FFFFFF" : colors.muted} />
+              <Switch value={status.isAutomaticTimeEnabled} onValueChange={handleAutomaticTime} disabled={isBusy || running || !isNativeTimeControlAvailable} trackColor={{ false: colors.border, true: colors.success }} thumbColor={status.isAutomaticTimeEnabled ? "#FFFFFF" : colors.muted} />
             </View>
           </View>
 
@@ -512,35 +467,6 @@ export default function HomeScreen() {
         </View>
       </KeyboardAvoidingView>
 
-      <Modal visible={isPairingDialogVisible} transparent animationType="fade" onRequestClose={() => setIsPairingDialogVisible(false)}>
-        <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-          <View style={[styles.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>Системный доступ</Text>
-            <Text style={[styles.pairingInstructions, { color: colors.muted }]}>1. Включите «Беспроводная отладка» в настройках разработчика.{"\n"}2. Откройте «Сопряжение устройства с помощью кода».{"\n"}3. Оставьте окно с кодом открытым и введите шестизначный код ниже.</Text>
-            <Pressable onPress={() => void handleOpenDeveloperSettings()} style={({ pressed }) => [styles.settingsButton, { borderColor: colors.primary }, pressed && styles.pressed]}>
-              <Text style={[styles.settingsButtonText, { color: colors.primary }]}>Открыть настройки разработчика</Text>
-            </Pressable>
-            <TextInput
-              autoFocus
-              value={pairingCode}
-              onChangeText={(value) => setPairingCode(value.replace(/\D/g, "").slice(0, 6))}
-              onSubmitEditing={() => void handlePairSystemAccess()}
-              keyboardType="number-pad"
-              inputMode="numeric"
-              maxLength={6}
-              returnKeyType="done"
-              placeholder="000000"
-              placeholderTextColor={colors.muted}
-              style={[styles.pairingInput, { backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
-            />
-            <View style={styles.modalActions}>
-              <Pressable disabled={isAccessBusy} onPress={() => setIsPairingDialogVisible(false)} style={({ pressed }) => [styles.modalActionButton, (pressed || isAccessBusy) && styles.pressed]}><Text style={[styles.modalCancelText, { color: colors.muted }]}>Отмена</Text></Pressable>
-              <Pressable disabled={isAccessBusy} onPress={() => void handlePairSystemAccess()} style={({ pressed }) => [styles.modalActionButton, styles.modalSaveButton, { backgroundColor: colors.primary }, (pressed || isAccessBusy) && styles.pressed]}><Text style={styles.modalSaveText}>{isAccessBusy ? "Подключение…" : "Сопрячь"}</Text></Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
       <Modal visible={isSaveDialogVisible} transparent animationType="fade" onRequestClose={closeSaveConfigurationDialog}>
         <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={[styles.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -562,13 +488,13 @@ const styles = StyleSheet.create({
   screen: { flex: 1 }, content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 96, gap: 9 },
   header: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 1 }, headerGlyph: { fontSize: 30, lineHeight: 34, fontWeight: "500" }, title: { fontSize: 22, fontWeight: "800", lineHeight: 27 },
   previewNotice: { borderRadius: 10, paddingVertical: 8, paddingHorizontal: 11, borderWidth: 1 }, previewText: { fontSize: 12, fontWeight: "600" },
-  systemAccessCard: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 8 }, accessButton: { minHeight: 46, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6 }, accessTextWrap: { flex: 1, paddingRight: 8 }, accessButtonText: { fontSize: 13, fontWeight: "800" }, accessHint: { fontSize: 10, marginTop: 2 }, accessChevron: { fontSize: 21, lineHeight: 21, fontWeight: "700" },
+  shizukuCard: { borderRadius: 14, padding: 10, borderWidth: 1, gap: 8 }, syncButton: { minHeight: 34, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderRadius: 9, paddingHorizontal: 9 }, syncButtonText: { fontSize: 13, fontWeight: "800" }, syncChevron: { fontSize: 21, lineHeight: 21, fontWeight: "700" },
   automaticTimeRow: { borderTopWidth: 1, paddingTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, automaticTimeText: { flex: 1, paddingRight: 8 }, automaticTimeTitle: { fontSize: 13, fontWeight: "800" }, automaticTimeHint: { fontSize: 11, marginTop: 2 },
   card: { borderRadius: 14, padding: 12, borderWidth: 1 }, cardHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, cardTitle: { fontSize: 15, lineHeight: 20, fontWeight: "800" }, nowButton: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 }, nowButtonText: { fontSize: 12, fontWeight: "800" },
   row: { flexDirection: "row", gap: 8, marginTop: 9 }, rowPrimary: { flex: 1.35 }, rowSecondary: { flex: 1 }, tripleRow: { flexDirection: "row", gap: 7, marginTop: 9 }, fieldWrap: { flex: 1 }, fieldLabel: { fontSize: 11, fontWeight: "700", marginBottom: 4 }, input: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, height: 40, fontSize: 15, fontWeight: "700" },
   repeatGroup: { marginTop: 8 }, repeatGroupTitle: { fontSize: 11, fontWeight: "800" }, repeatDivider: { height: 1, marginTop: 11 },
   logCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" }, logToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12 }, chevron: { fontSize: 20, lineHeight: 20, fontWeight: "800" }, logActions: { flexDirection: "row", gap: 6, paddingHorizontal: 12, paddingBottom: 8 }, textAction: { paddingVertical: 5, paddingHorizontal: 7 }, textActionLabel: { fontSize: 12, fontWeight: "800" }, emptyLogText: { fontSize: 13, paddingHorizontal: 12, paddingBottom: 12 }, logItem: { marginHorizontal: 10, marginBottom: 7, borderRadius: 10, padding: 9 }, logTime: { fontSize: 10, fontWeight: "800", marginBottom: 3 }, logMessage: { fontSize: 12, lineHeight: 16 },
   configurationHeader: { minHeight: 58, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 10, paddingVertical: 8 }, saveConfigurationButton: { flexShrink: 1, borderWidth: 1, borderRadius: 9, paddingHorizontal: 11, paddingVertical: 8 }, saveConfigurationButtonText: { fontSize: 13, fontWeight: "800" }, configurationToggle: { width: 44, height: 40, marginLeft: 28, alignItems: "center", justifyContent: "center", borderRadius: 9 }, configurationList: { paddingHorizontal: 10, paddingBottom: 10, gap: 7 }, configurationEmptyText: { paddingHorizontal: 2, paddingBottom: 2 }, configurationItem: { minHeight: 42, borderRadius: 10, paddingHorizontal: 11, paddingVertical: 9, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }, configurationItemName: { flex: 1, fontSize: 13, fontWeight: "700" }, configurationCurrent: { fontSize: 11, fontWeight: "800" },
-  modalBackdrop: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 22, backgroundColor: "rgba(0,0,0,0.45)" }, modalCard: { width: "100%", maxWidth: 430, borderWidth: 1, borderRadius: 16, padding: 16 }, modalTitle: { fontSize: 18, fontWeight: "800" }, modalHint: { fontSize: 12, marginTop: 5, marginBottom: 10 }, modalInput: { height: 44, borderWidth: 1, borderRadius: 10, paddingHorizontal: 11, fontSize: 15, fontWeight: "700" }, pairingInstructions: { fontSize: 12, lineHeight: 18, marginTop: 8 }, settingsButton: { borderWidth: 1, borderRadius: 10, minHeight: 40, alignItems: "center", justifyContent: "center", marginTop: 12, paddingHorizontal: 10 }, settingsButtonText: { fontSize: 12, fontWeight: "800" }, pairingInput: { height: 48, borderWidth: 1, borderRadius: 10, paddingHorizontal: 11, fontSize: 22, letterSpacing: 6, fontWeight: "800", textAlign: "center", marginTop: 12 }, modalActions: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 14 }, modalActionButton: { minHeight: 40, minWidth: 88, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 }, modalSaveButton: { minWidth: 110 }, modalCancelText: { fontSize: 13, fontWeight: "800" }, modalSaveText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
+  modalBackdrop: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 22, backgroundColor: "rgba(0,0,0,0.45)" }, modalCard: { width: "100%", maxWidth: 430, borderWidth: 1, borderRadius: 16, padding: 16 }, modalTitle: { fontSize: 18, fontWeight: "800" }, modalHint: { fontSize: 12, marginTop: 5, marginBottom: 10 }, modalInput: { height: 44, borderWidth: 1, borderRadius: 10, paddingHorizontal: 11, fontSize: 15, fontWeight: "700" }, modalActions: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 14 }, modalActionButton: { minHeight: 40, minWidth: 88, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 }, modalSaveButton: { minWidth: 110 }, modalCancelText: { fontSize: 13, fontWeight: "800" }, modalSaveText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
   footer: { paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1 }, primaryButton: { height: 50, borderRadius: 14, alignItems: "center", justifyContent: "center" }, stopButton: { minHeight: 50, borderRadius: 14, alignItems: "center", justifyContent: "center", paddingHorizontal: 10, paddingVertical: 8 }, primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800", textAlign: "center" }, pressed: { opacity: 0.68, transform: [{ scale: 0.98 }] },
 });
