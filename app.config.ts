@@ -1,6 +1,7 @@
 import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
 
+// Release 25.
 const rawBundleId = "com.app.androidtimecycler";
 const bundleId =
   rawBundleId
