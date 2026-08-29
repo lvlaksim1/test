@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const PLUGIN_NAME = "with-time-bridge";
-const PLUGIN_VERSION = "1.0.0";
+const PLUGIN_VERSION = "1.0.1";
 
 function withTimeBridge(config) {
   config = withAndroidManifest(config, (mod) => {
@@ -24,23 +24,42 @@ function withTimeBridge(config) {
     }
 
     application.service = application.service ?? [];
-    const serviceName = `${config.android.package}.timeaccessibility.TimeCycleForegroundService`;
-    if (!application.service.some((service) => service.$?.["android:name"] === serviceName)) {
-      application.service.push({
+    for (const [className, subtype] of [
+      ["TimeCycleForegroundService", "User-started cyclic system time operation"],
+      ["TimePairingService", "User-started wireless debugging pairing operation"],
+    ]) {
+      const serviceName = `${config.android.package}.timeaccessibility.${className}`;
+      if (!application.service.some((service) => service.$?.["android:name"] === serviceName)) {
+        application.service.push({
+          $: {
+            "android:name": serviceName,
+            "android:enabled": "true",
+            "android:exported": "false",
+            "android:foregroundServiceType": "specialUse",
+          },
+          property: [
+            {
+              $: {
+                "android:name": "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE",
+                "android:value": subtype,
+              },
+            },
+          ],
+        });
+      }
+    }
+
+    application.activity = application.activity ?? [];
+    const launcherActivityName = `${config.android.package}.timeaccessibility.TimePairingLauncherActivity`;
+    if (!application.activity.some((activity) => activity.$?.["android:name"] === launcherActivityName)) {
+      application.activity.push({
         $: {
-          "android:name": serviceName,
+          "android:name": launcherActivityName,
           "android:enabled": "true",
           "android:exported": "false",
-          "android:foregroundServiceType": "specialUse",
+          "android:excludeFromRecents": "true",
+          "android:theme": "@android:style/Theme.Translucent.NoTitleBar",
         },
-        property: [
-          {
-            $: {
-              "android:name": "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE",
-              "android:value": "User-started cyclic system time operation",
-            },
-          },
-        ],
       });
     }
     return mod;
@@ -102,6 +121,8 @@ function withTimeBridge(config) {
       "TimeLocalAdbController.kt",
       "TimeCycleRunner.kt",
       "TimeCycleForegroundService.kt",
+      "TimePairingService.kt",
+      "TimePairingLauncherActivity.kt",
     ]) {
       const source = fs.readFileSync(path.join(sourceRoot, fileName), "utf8");
       fs.writeFileSync(path.join(kotlinRoot, fileName), source.replaceAll("__PACKAGE__", packageName));

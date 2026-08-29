@@ -1,7 +1,6 @@
 package __PACKAGE__.timeaccessibility
 
 import android.content.Intent
-import android.provider.Settings
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -24,23 +23,31 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
     @ReactMethod
     fun connectSystemAccess(promise: Promise) {
         TimeLocalAdbController.connect(context) { outcome ->
-            if (outcome.isSuccess) promise.resolve(statusWithAccess())
-            else promise.reject("SYSTEM_ACCESS_CONNECT_FAILED", outcome.detail)
+            if (outcome.isSuccess) {
+                TimePairingService.stop(context)
+                promise.resolve(statusWithAccess())
+            } else {
+                promise.reject("SYSTEM_ACCESS_CONNECT_FAILED", outcome.detail)
+            }
         }
     }
 
     @ReactMethod
     fun pairSystemAccess(pairingCode: String, promise: Promise) {
         TimeLocalAdbController.pair(context, pairingCode) { outcome ->
-            if (outcome.isSuccess) promise.resolve(statusWithAccess())
-            else promise.reject("SYSTEM_ACCESS_PAIR_FAILED", outcome.detail)
+            if (outcome.isSuccess) {
+                TimePairingService.stop(context)
+                promise.resolve(statusWithAccess())
+            } else {
+                promise.reject("SYSTEM_ACCESS_PAIR_FAILED", outcome.detail)
+            }
         }
     }
 
     @ReactMethod
     fun openDeveloperSettings(promise: Promise) {
         runCatching {
-            val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val intent = Intent(context, TimePairingLauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
         }.onSuccess { promise.resolve(true) }
             .onFailure { promise.reject("DEVELOPER_SETTINGS_FAILED", "Не удалось открыть настройки разработчика.", it) }
