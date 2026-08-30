@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const PLUGIN_NAME = "with-time-shizuku";
-const PLUGIN_VERSION = "1.0.0";
+const PLUGIN_VERSION = "1.1.0";
 
 function withTimeShizuku(config) {
   config = withAndroidManifest(config, (mod) => {
@@ -60,6 +60,9 @@ function withTimeShizuku(config) {
     if (!mod.modResults.contents.includes("dev.rikka.shizuku:api:13.1.5")) {
       mod.modResults.contents = mod.modResults.contents.replace(/dependencies\s*\{/, 'dependencies {\n    implementation "dev.rikka.shizuku:api:13.1.5"\n    implementation "dev.rikka.shizuku:provider:13.1.5"');
     }
+    if (!mod.modResults.contents.includes("junit:junit:4.13.2")) {
+      mod.modResults.contents = mod.modResults.contents.replace(/dependencies\s*\{/, 'dependencies {\n    testImplementation "junit:junit:4.13.2"');
+    }
     if (!mod.modResults.contents.includes("aidl true")) {
       mod.modResults.contents = mod.modResults.contents.replace(/android\s*\{/, "android {\n    buildFeatures {\n        aidl true\n    }");
     }
@@ -84,16 +87,35 @@ function withTimeShizuku(config) {
     if (!packageName) throw new Error("android.package must be set before adding the Shizuku bridge");
     const projectRoot = mod.modRequest.platformProjectRoot;
     const sourceRoot = path.join(__dirname, "..", "native", "timeaccessibility");
-    const kotlinRoot = path.join(projectRoot, "app", "src", "main", "java", ...packageName.split("."), "timeaccessibility");
-    const aidlRoot = path.join(projectRoot, "app", "src", "main", "aidl", ...packageName.split("."), "timeaccessibility");
+    const testSourceRoot = path.join(__dirname, "..", "native", "timeaccessibility-tests");
+    const packageParts = packageName.split(".");
+    const kotlinRoot = path.join(projectRoot, "app", "src", "main", "java", ...packageParts, "timeaccessibility");
+    const aidlRoot = path.join(projectRoot, "app", "src", "main", "aidl", ...packageParts, "timeaccessibility");
+    const testRoot = path.join(projectRoot, "app", "src", "test", "java", ...packageParts, "timeaccessibility");
     fs.mkdirSync(kotlinRoot, { recursive: true });
     fs.mkdirSync(aidlRoot, { recursive: true });
-    for (const fileName of ["TimeControlModule.kt", "TimeControlPackage.kt", "TimeCycleStore.kt", "TimeShizukuController.kt", "TimeShizukuCycleRunner.kt", "TimeShizukuUserService.kt", "TimeCycleForegroundService.kt"]) {
+    fs.mkdirSync(testRoot, { recursive: true });
+
+    for (const fileName of [
+      "CycleEngine.kt",
+      "CycleScheduler.kt",
+      "TimeControlModule.kt",
+      "TimeControlPackage.kt",
+      "TimeCycleStore.kt",
+      "TimeShizukuController.kt",
+      "TimeShizukuCycleRunner.kt",
+      "TimeShizukuUserService.kt",
+      "TimeCycleForegroundService.kt",
+    ]) {
       const source = fs.readFileSync(path.join(sourceRoot, fileName), "utf8");
       fs.writeFileSync(path.join(kotlinRoot, fileName), source.replaceAll("__PACKAGE__", packageName));
     }
+
     const aidlSource = fs.readFileSync(path.join(sourceRoot, "ITimeShizukuService.aidl"), "utf8");
     fs.writeFileSync(path.join(aidlRoot, "ITimeShizukuService.aidl"), aidlSource.replaceAll("__PACKAGE__", packageName));
+
+    const engineTest = fs.readFileSync(path.join(testSourceRoot, "CycleEngineTest.kt"), "utf8");
+    fs.writeFileSync(path.join(testRoot, "CycleEngineTest.kt"), engineTest.replaceAll("__PACKAGE__", packageName));
     return mod;
   }]);
   return config;

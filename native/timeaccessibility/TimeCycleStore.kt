@@ -7,11 +7,8 @@ import android.provider.Settings
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-
-enum class CyclePhase { IDLE, WAITING, APPLYING }
 
 object TimeCycleStore {
     private const val PREFS = "time_cycle_shizuku"
@@ -33,6 +30,8 @@ object TimeCycleStore {
     private const val KEY_NEXT_DUE_ELAPSED = "next_due_elapsed"
     private const val KEY_BOOT_COUNT = "boot_count"
     private const val KEY_SERVICE_HEARTBEAT = "service_heartbeat_elapsed"
+    private const val KEY_RUNTIME_SCHEMA = "runtime_schema"
+    private const val RUNTIME_SCHEMA = 2
     private const val HEARTBEAT_STALE_MILLIS = 20_000L
 
     private fun prefs(context: Context): SharedPreferences =
@@ -42,94 +41,94 @@ object TimeCycleStore {
         Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1)
     }.getOrDefault(-1)
 
-    fun saveAndStart(
-        context: Context,
-        startAtMillis: Long,
-        stepDays: Int,
-        stepHours: Int,
-        stepMinutes: Int,
-        pauseSeconds: Int,
-        repeatsPerSeries: Int,
-        seriesPauseSeconds: Int,
-        totalSeries: Int,
-        totalCycles: Int,
-    ) {
+    fun saveAndStart(context: Context, plan: CyclePlan) {
+        CycleEngine.validatePlan(plan)
         val nowElapsed = SystemClock.elapsedRealtime()
+        val state = CycleEngine.initialState(nowElapsed)
         prefs(context).edit()
-            .putLong(KEY_START, startAtMillis)
-            .putInt(KEY_DAYS, stepDays)
-            .putInt(KEY_HOURS, stepHours)
-            .putInt(KEY_MINUTES, stepMinutes)
-            .putInt(KEY_PAUSE, pauseSeconds)
-            .putInt(KEY_REPEATS_PER_SERIES, repeatsPerSeries)
-            .putInt(KEY_SERIES_PAUSE, seriesPauseSeconds)
-            .putInt(KEY_TOTAL_SERIES, totalSeries)
-            .putInt(KEY_TOTAL, totalCycles)
-            .putInt(KEY_COMPLETED, 0)
-            .putBoolean(KEY_RUNNING, true)
-            .putString(KEY_PHASE, CyclePhase.WAITING.name)
-            .putLong(KEY_NEXT_DUE_ELAPSED, nowElapsed)
+            .putLong(KEY_START, plan.startAtMillis)
+            .putInt(KEY_DAYS, plan.stepDays)
+            .putInt(KEY_HOURS, plan.stepHours)
+            .putInt(KEY_MINUTES, plan.stepMinutes)
+            .putInt(KEY_PAUSE, (plan.pauseMillis / 1000L).toInt())
+            .putInt(KEY_REPEATS_PER_SERIES, plan.repeatsPerSeries)
+            .putInt(KEY_SERIES_PAUSE, (plan.seriesPauseMillis / 1000L).toInt())
+            .putInt(KEY_TOTAL_SERIES, plan.totalSeries)
+            .putInt(KEY_TOTAL, plan.totalCycles)
             .putInt(KEY_BOOT_COUNT, bootCount(context))
             .putLong(KEY_SERVICE_HEARTBEAT, nowElapsed)
+            .putInt(KEY_RUNTIME_SCHEMA, RUNTIME_SCHEMA)
             .remove(KEY_LAST_APPLIED)
             .apply()
-        addEvent(context, "Цикл запущен: главных циклов — $totalSeries, повторов в каждом — $repeatsPerSeries, всего изменений — $totalCycles.")
+        saveState(context, state)
+        addEvent(
+            context,
+            "Цикл запущен: главных циклов — ${plan.totalSeries}, повторов в каждом — ${plan.repeatsPerSeries}, всего изменений — ${plan.totalCycles}.",
+        )
+    }
+
+    fun loadPlan(context: Context): CyclePlan? {
+        val storage = prefs(context)
+        if (!storage.contains(KEY_START)) return null
+        return CyclePlan(
+            startAtMillis = storage.getLong(KEY_START, 0L),
+            stepDays = storage.getInt(KEY_DAYS, 0),
+            stepHours = storage.getInt(KEY_HOURS, 0),
+            stepMinutes = storage.getInt(KEY_MINUTES, 0),
+            pauseMillis = storage.getInt(KEY_PAUSE, 1).coerceAtLeast(1) * 1000L,
+            repeatsPerSeries = storage.getInt(KEY_REPEATS_PER_SERIES, 1).coerceAtLeast(1),
+            seriesPauseMillis = storage.getInt(KEY_SERIES_PAUSE, 0).coerceAtLeast(0) * 1000L,
+            totalSeries = storage.getInt(KEY_TOTAL_SERIES, 1).coerceAtLeast(1),
+        )
+    }
+
+    fun loadState(context: Context): CycleRuntimeState {
+        val storage = prefs(context)
+        val rawPhase = storage.getString(KEY_PHASE, CyclePhase.IDLE.name)
+        val phase = runCatching { CyclePhase.valueOf(rawPhase ?: CyclePhase.IDLE.name) }
+            .getOrDefault(CyclePhase.IDLE)
+        return CycleRuntimeState(
+            phase = phase,
+            completedCycles = storage.getInt(KEY_COMPLETED, 0).coerceAtLeast(0),
+            nextDueElapsed = if (storage.contains(KEY_NEXT_DUE_ELAPSED)) storage.getLong(KEY_NEXT_DUE_ELAPSED, 0L) else null,
+            lastAppliedMillis = if (storage.contains(KEY_LAST_APPLIED)) storage.getLong(KEY_LAST_APPLIED, 0L) else null,
+        )
+    }
+
+    fun saveState(context: Context, state: CycleRuntimeState) {
+        val active = state.phase == CyclePhase.WAITING || state.phase == CyclePhase.APPLYING || state.phase == CyclePhase.STOPPING
+        val editor = prefs(context).edit()
+            .putInt(KEY_COMPLETED, state.completedCycles)
+            .putBoolean(KEY_RUNNING, active)
+            .putString(KEY_PHASE, state.phase.name)
+        if (state.nextDueElapsed == null) editor.remove(KEY_NEXT_DUE_ELAPSED) else editor.putLong(KEY_NEXT_DUE_ELAPSED, state.nextDueElapsed)
+        if (state.lastAppliedMillis == null) editor.remove(KEY_LAST_APPLIED) else editor.putLong(KEY_LAST_APPLIED, state.lastAppliedMillis)
+        editor.apply()
     }
 
     fun stop(context: Context, note: String = "Цикл остановлен пользователем.") {
-        val wasRunning = isRunning(context)
-        setStopped(context)
-        if (wasRunning) addEvent(context, note)
-    }
-
-    fun stopInterrupted(context: Context, note: String) {
-        if (!isRunning(context)) return
-        setStopped(context)
+        val state = loadState(context)
+        if (!isActive(state)) return
+        saveState(context, CycleEngine.markStopped(state))
         addEvent(context, note)
     }
 
-    private fun setStopped(context: Context) {
-        prefs(context).edit()
-            .putBoolean(KEY_RUNNING, false)
-            .putString(KEY_PHASE, CyclePhase.IDLE.name)
-            .remove(KEY_NEXT_DUE_ELAPSED)
-            .apply()
+    fun markStopping(context: Context) {
+        val state = loadState(context)
+        if (isActive(state)) saveState(context, CycleEngine.markStopping(state))
     }
 
-    fun isRunning(context: Context): Boolean = prefs(context).getBoolean(KEY_RUNNING, false)
-    fun completedCycles(context: Context): Int = prefs(context).getInt(KEY_COMPLETED, 0)
-    fun totalCycles(context: Context): Int = prefs(context).getInt(KEY_TOTAL, 0)
-
-    fun repeatsPerSeries(context: Context): Int {
-        val storage = prefs(context)
-        return storage.getInt(KEY_REPEATS_PER_SERIES, storage.getInt(KEY_TOTAL, 1)).coerceAtLeast(1)
+    fun stopInterrupted(context: Context, note: String) {
+        val state = loadState(context)
+        if (!isActive(state)) return
+        saveState(context, CycleEngine.markInterrupted(state))
+        addEvent(context, note)
     }
 
-    fun totalSeries(context: Context): Int = prefs(context).getInt(KEY_TOTAL_SERIES, 1).coerceAtLeast(1)
+    fun isRunning(context: Context): Boolean = isActive(loadState(context))
 
-    fun phase(context: Context): CyclePhase {
-        val raw = prefs(context).getString(KEY_PHASE, CyclePhase.IDLE.name)
-        return runCatching { CyclePhase.valueOf(raw ?: CyclePhase.IDLE.name) }.getOrDefault(CyclePhase.IDLE)
-    }
-
-    fun nextDueElapsed(context: Context): Long? {
-        val storage = prefs(context)
-        return if (storage.contains(KEY_NEXT_DUE_ELAPSED)) storage.getLong(KEY_NEXT_DUE_ELAPSED, 0L) else null
-    }
-
-    fun markApplying(context: Context) {
-        prefs(context).edit()
-            .putString(KEY_PHASE, CyclePhase.APPLYING.name)
-            .remove(KEY_NEXT_DUE_ELAPSED)
-            .apply()
-    }
-
-    fun setWaitingUntil(context: Context, dueElapsed: Long) {
-        prefs(context).edit()
-            .putString(KEY_PHASE, CyclePhase.WAITING.name)
-            .putLong(KEY_NEXT_DUE_ELAPSED, dueElapsed)
-            .apply()
-    }
+    private fun isActive(state: CycleRuntimeState): Boolean =
+        state.phase == CyclePhase.WAITING || state.phase == CyclePhase.APPLYING || state.phase == CyclePhase.STOPPING
 
     fun markServiceHeartbeat(context: Context) {
         if (!isRunning(context)) return
@@ -149,6 +148,11 @@ object TimeCycleStore {
             stopInterrupted(context, "Цикл остановлен после перезагрузки устройства. Запустите его заново.")
             return false
         }
+        val plan = loadPlan(context)
+        if (plan == null || runCatching { CycleEngine.validatePlan(plan) }.isFailure) {
+            stopInterrupted(context, "Цикл остановлен: сохранённый план повреждён. Запустите цикл заново.")
+            return false
+        }
         return true
     }
 
@@ -162,80 +166,42 @@ object TimeCycleStore {
         }
     }
 
-    fun isBetweenSeriesPause(context: Context): Boolean {
-        val completed = completedCycles(context)
-        val total = totalCycles(context)
-        val repeats = repeatsPerSeries(context)
-        return completed > 0 && completed < total && completed % repeats == 0
-    }
-
-    fun pauseBeforeNextMillis(context: Context): Long {
-        val storage = prefs(context)
-        val seconds = if (isBetweenSeriesPause(context)) {
-            storage.getInt(KEY_SERIES_PAUSE, 0).coerceAtLeast(0)
-        } else {
-            storage.getInt(KEY_PAUSE, 1).coerceAtLeast(1)
-        }
-        return seconds * 1000L
-    }
-
     fun setAutomaticTimeEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTOMATIC_TIME, enabled).apply()
-    }
-
-    fun targetForCurrentCycle(context: Context): Long {
-        val storage = prefs(context)
-        val calendar = Calendar.getInstance().apply { timeInMillis = storage.getLong(KEY_START, System.currentTimeMillis()) }
-        val index = storage.getInt(KEY_COMPLETED, 0)
-        calendar.add(Calendar.DAY_OF_YEAR, storage.getInt(KEY_DAYS, 0) * index)
-        calendar.add(Calendar.HOUR_OF_DAY, storage.getInt(KEY_HOURS, 0) * index)
-        calendar.add(Calendar.MINUTE, storage.getInt(KEY_MINUTES, 0) * index)
-        return calendar.timeInMillis
-    }
-
-    fun markAttemptSucceeded(context: Context, targetMillis: Long, detail: String): Boolean {
-        val storage = prefs(context)
-        val completed = storage.getInt(KEY_COMPLETED, 0) + 1
-        val total = storage.getInt(KEY_TOTAL, 0)
-        val running = completed < total
-        val editor = storage.edit()
-            .putInt(KEY_COMPLETED, completed)
-            .putBoolean(KEY_RUNNING, running)
-            .putLong(KEY_LAST_APPLIED, targetMillis)
-        if (!running) {
-            editor.putString(KEY_PHASE, CyclePhase.IDLE.name).remove(KEY_NEXT_DUE_ELAPSED)
-        }
-        editor.apply()
-        val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
-        addEvent(context, "Применено значение $formatted. $detail")
-        if (!running) addEvent(context, "Все ${totalSeries(context)} главных циклов завершены. Выполнено изменений: $total.")
-        return running
-    }
-
-    fun markAttemptFailed(context: Context, targetMillis: Long, detail: String) {
-        setStopped(context)
-        val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
-        addEvent(context, "Не подтверждено значение $formatted. $detail")
-        addEvent(context, "Цикл остановлен из-за ошибки Shizuku.")
-    }
-
-    fun finishIfComplete(context: Context) {
-        setStopped(context)
     }
 
     fun status(context: Context): JSONObject {
         reconcileRuntimeState(context)
         val storage = prefs(context)
-        val running = storage.getBoolean(KEY_RUNNING, false)
+        val state = loadState(context)
+        val plan = loadPlan(context)
+        val running = isActive(state)
+        val nextTarget = if (running && plan != null) CycleEngine.currentStep(plan, state)?.targetMillis else null
         return JSONObject().apply {
             put("isRunning", running)
-            put("completedCycles", storage.getInt(KEY_COMPLETED, 0))
-            put("totalCycles", storage.getInt(KEY_TOTAL, 0))
-            put("nextTargetMillis", if (running && storage.contains(KEY_START)) targetForCurrentCycle(context) else JSONObject.NULL)
-            put("lastAppliedMillis", if (storage.contains(KEY_LAST_APPLIED)) storage.getLong(KEY_LAST_APPLIED, 0L) else JSONObject.NULL)
+            put("completedCycles", state.completedCycles)
+            put("totalCycles", plan?.totalCycles ?: storage.getInt(KEY_TOTAL, 0))
+            put("nextTargetMillis", nextTarget ?: JSONObject.NULL)
+            put("lastAppliedMillis", state.lastAppliedMillis ?: JSONObject.NULL)
             put("isAutomaticTimeEnabled", storage.getBoolean(KEY_AUTOMATIC_TIME, true))
+            put("phase", state.phase.name)
             put("events", events(context))
         }
+    }
+
+    fun logAttemptSucceeded(context: Context, targetMillis: Long, detail: String) {
+        val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
+        addEvent(context, "Применено значение $formatted. $detail")
+    }
+
+    fun logAttemptFailed(context: Context, targetMillis: Long, detail: String) {
+        val formatted = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(targetMillis))
+        addEvent(context, "Не подтверждено значение $formatted. $detail")
+        addEvent(context, "Цикл остановлен из-за ошибки Shizuku.")
+    }
+
+    fun logCompleted(context: Context, plan: CyclePlan) {
+        addEvent(context, "Все ${plan.totalSeries} главных циклов завершены. Выполнено изменений: ${plan.totalCycles}.")
     }
 
     fun events(context: Context): JSONArray {

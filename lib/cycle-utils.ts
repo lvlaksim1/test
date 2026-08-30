@@ -93,16 +93,6 @@ export function parseCycleForm(form: CycleForm): { config?: CycleConfig; error?:
   };
 }
 
-export function targetAt(config: CycleConfig, cycleIndex: number): Date {
-  const target = new Date(config.startAtMillis);
-  for (let index = 0; index < cycleIndex; index += 1) {
-    target.setDate(target.getDate() + config.stepDays);
-    target.setHours(target.getHours() + config.stepHours);
-    target.setMinutes(target.getMinutes() + config.stepMinutes);
-  }
-  return target;
-}
-
 export function toFormStart(value: number | Date): Pick<CycleForm, "date" | "time"> {
   const date = value instanceof Date ? value : new Date(value);
   return {

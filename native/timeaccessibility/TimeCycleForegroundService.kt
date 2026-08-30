@@ -58,7 +58,7 @@ class TimeCycleForegroundService : Service() {
 
     override fun onDestroy() {
         heartbeatHandler.removeCallbacks(heartbeatTask)
-        TimeShizukuCycleRunner.stop()
+        TimeShizukuCycleRunner.stop(applicationContext)
         super.onDestroy()
     }
 

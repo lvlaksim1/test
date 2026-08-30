@@ -72,24 +72,22 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
             return
         }
         runCatching {
-            val startAt = settings.getDouble("startAtMillis").toLong()
-            val days = settings.getInt("stepDays")
-            val hours = settings.getInt("stepHours")
-            val minutes = settings.getInt("stepMinutes")
-            val pause = settings.getInt("pauseSeconds")
-            val repeatsPerSeries = settings.getInt("repeatsPerSeries")
-            val seriesPause = settings.getInt("seriesPauseSeconds")
-            val totalSeries = settings.getInt("totalSeries")
-            val total = settings.getInt("totalCycles")
-            require(pause in 1..86400) { "Пауза между повторами должна быть от 1 секунды до 24 часов." }
-            require(seriesPause in 0..86400) { "Пауза между главными циклами должна быть от 0 секунд до 24 часов." }
-            require(repeatsPerSeries in 1..99999) { "Количество повторов во вложенном цикле должно быть от 1 до 99999." }
-            require(totalSeries in 1..99999) { "Количество главных циклов должно быть от 1 до 99999." }
-            val calculatedTotal = repeatsPerSeries.toLong() * totalSeries.toLong()
-            require(calculatedTotal in 1L..99999L && total == calculatedTotal.toInt()) { "Общее количество изменений не должно превышать 99999." }
-            require(days in -999..999 && hours in -999..999 && minutes in -999..999) { "Шаг задан вне допустимого диапазона." }
-            require(days != 0 || hours != 0 || minutes != 0) { "Шаг изменения не может состоять только из нулей." }
-            TimeCycleStore.saveAndStart(context, startAt, days, hours, minutes, pause, repeatsPerSeries, seriesPause, totalSeries, total)
+            val plan = CyclePlan(
+                startAtMillis = settings.getDouble("startAtMillis").toLong(),
+                stepDays = settings.getInt("stepDays"),
+                stepHours = settings.getInt("stepHours"),
+                stepMinutes = settings.getInt("stepMinutes"),
+                pauseMillis = settings.getInt("pauseSeconds") * 1000L,
+                repeatsPerSeries = settings.getInt("repeatsPerSeries"),
+                seriesPauseMillis = settings.getInt("seriesPauseSeconds") * 1000L,
+                totalSeries = settings.getInt("totalSeries"),
+            )
+            CycleEngine.validatePlan(plan)
+            val requestedTotal = settings.getInt("totalCycles")
+            require(requestedTotal == plan.totalCycles) {
+                "Общее количество изменений не соответствует параметрам цикла."
+            }
+            TimeCycleStore.saveAndStart(context, plan)
             TimeCycleForegroundService.start(context)
         }.onSuccess { resolveStatus(promise) }
             .onFailure { promise.reject("START_FAILED", it.message ?: "Не удалось запустить цикл.", it) }
@@ -97,7 +95,7 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
 
     @ReactMethod
     fun stopCycle(promise: Promise) {
-        TimeShizukuCycleRunner.stop()
+        TimeShizukuCycleRunner.stop(context)
         TimeCycleStore.stop(context)
         TimeCycleForegroundService.stop(context)
         resolveStatus(promise)
