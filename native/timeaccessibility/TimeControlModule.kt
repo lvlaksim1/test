@@ -16,11 +16,21 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
 
     @ReactMethod
     fun getStatus(promise: Promise) {
-        val status = jsonToWritableMap(TimeCycleStore.status(context))
+        TimeCycleStore.reconcileRuntimeState(context)
         val shizuku = TimeShizukuController.state()
-        status.putBoolean("isShizukuRunning", shizuku.isRunning)
-        status.putBoolean("isShizukuPermissionGranted", shizuku.isPermissionGranted)
-        promise.resolve(status)
+        if (shizuku.isPermissionGranted && !TimeCycleStore.isRunning(context)) {
+            TimeShizukuController.getAutomaticTime(context) { outcome ->
+                if (outcome.isSuccess) {
+                    when (outcome.detail.removePrefix("OK:").trim()) {
+                        "1" -> TimeCycleStore.setAutomaticTimeEnabled(context, true)
+                        "0" -> TimeCycleStore.setAutomaticTimeEnabled(context, false)
+                    }
+                }
+                resolveStatus(promise)
+            }
+        } else {
+            resolveStatus(promise)
+        }
     }
 
     @ReactMethod
@@ -30,7 +40,7 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
             promise.reject("SHIZUKU_NOT_RUNNING", "Сначала установите и запустите Shizuku через беспроводную отладку.")
             return
         }
-        if (current.isPermissionGranted || TimeShizukuController.requestPermission()) promise.resolve(true) else promise.resolve(false)
+        TimeShizukuController.requestPermission { granted -> promise.resolve(granted) }
     }
 
     @ReactMethod
@@ -43,7 +53,7 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
             if (outcome.isSuccess) {
                 TimeCycleStore.setAutomaticTimeEnabled(context, enabled)
                 TimeCycleStore.addEvent(context, outcome.detail)
-                promise.resolve(jsonToWritableMap(TimeCycleStore.status(context)))
+                resolveStatus(promise)
             } else {
                 promise.reject("AUTOMATIC_TIME_FAILED", outcome.detail)
             }
@@ -55,6 +65,10 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
         val shizuku = TimeShizukuController.state()
         if (!shizuku.isPermissionGranted) {
             promise.reject("SHIZUKU_PERMISSION_REQUIRED", "Сначала запустите Shizuku и нажмите «Разрешить Shizuku» в приложении.")
+            return
+        }
+        if (TimeCycleStore.isRunning(context)) {
+            promise.reject("CYCLE_RUNNING", "Цикл уже выполняется.")
             return
         }
         runCatching {
@@ -74,9 +88,10 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
             val calculatedTotal = repeatsPerSeries.toLong() * totalSeries.toLong()
             require(calculatedTotal in 1L..99999L && total == calculatedTotal.toInt()) { "Общее количество изменений не должно превышать 99999." }
             require(days in -999..999 && hours in -999..999 && minutes in -999..999) { "Шаг задан вне допустимого диапазона." }
+            require(days != 0 || hours != 0 || minutes != 0) { "Шаг изменения не может состоять только из нулей." }
             TimeCycleStore.saveAndStart(context, startAt, days, hours, minutes, pause, repeatsPerSeries, seriesPause, totalSeries, total)
             TimeCycleForegroundService.start(context)
-        }.onSuccess { promise.resolve(jsonToWritableMap(TimeCycleStore.status(context))) }
+        }.onSuccess { resolveStatus(promise) }
             .onFailure { promise.reject("START_FAILED", it.message ?: "Не удалось запустить цикл.", it) }
     }
 
@@ -85,13 +100,21 @@ class TimeControlModule(private val context: ReactApplicationContext) : ReactCon
         TimeShizukuCycleRunner.stop()
         TimeCycleStore.stop(context)
         TimeCycleForegroundService.stop(context)
-        promise.resolve(jsonToWritableMap(TimeCycleStore.status(context)))
+        resolveStatus(promise)
     }
 
     @ReactMethod
     fun clearEvents(promise: Promise) {
         TimeCycleStore.clearEvents(context)
         promise.resolve(true)
+    }
+
+    private fun resolveStatus(promise: Promise) {
+        val status = jsonToWritableMap(TimeCycleStore.status(context))
+        val shizuku = TimeShizukuController.state()
+        status.putBoolean("isShizukuRunning", shizuku.isRunning)
+        status.putBoolean("isShizukuPermissionGranted", shizuku.isPermissionGranted)
+        promise.resolve(status)
     }
 
     private fun jsonToWritableMap(value: JSONObject): WritableMap {

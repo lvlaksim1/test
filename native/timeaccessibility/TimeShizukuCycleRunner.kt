@@ -5,23 +5,45 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 
-/** Runs the cycle while the foreground service keeps the app process active. Shizuku performs the privileged time change. */
+/** Executes one persisted cycle state at a time while the foreground service keeps the process alive. */
 object TimeShizukuCycleRunner {
     private val handler = Handler(Looper.getMainLooper())
     private var scheduledTask: Runnable? = null
     private var commandInFlight = false
     private var generation = 0L
 
-    fun start(context: Context) {
-        stopScheduledTask()
-        commandInFlight = false
+    fun startOrResume(context: Context) {
+        val appContext = context.applicationContext
+        if (scheduledTask != null || commandInFlight) return
+        if (!TimeCycleStore.validateRuntimeForService(appContext)) {
+            TimeCycleForegroundService.stop(appContext)
+            return
+        }
+        when (TimeCycleStore.phase(appContext)) {
+            CyclePhase.APPLYING -> {
+                TimeCycleStore.stopInterrupted(appContext, "Цикл остановлен: приложение было перезапущено во время изменения системного времени. Проверьте время и запустите цикл заново.")
+                TimeCycleForegroundService.stop(appContext)
+                return
+            }
+            CyclePhase.IDLE -> {
+                TimeCycleStore.stopInterrupted(appContext, "Цикл остановлен из-за некорректного сохранённого состояния.")
+                TimeCycleForegroundService.stop(appContext)
+                return
+            }
+            CyclePhase.WAITING -> Unit
+        }
+
         generation += 1L
-        scheduleAt(context.applicationContext, SystemClock.elapsedRealtime(), generation)
+        val dueElapsed = TimeCycleStore.nextDueElapsed(appContext) ?: SystemClock.elapsedRealtime().also {
+            TimeCycleStore.setWaitingUntil(appContext, it)
+        }
+        scheduleAt(appContext, dueElapsed, generation)
     }
 
     fun stop() {
         generation += 1L
         stopScheduledTask()
+        if (commandInFlight) TimeShizukuController.cancelActiveCommand()
         commandInFlight = false
     }
 
@@ -58,6 +80,7 @@ object TimeShizukuCycleRunner {
         val seriesIndex = completed / repeats + 1
         val repeatIndex = completed % repeats + 1
         val targetMillis = TimeCycleStore.targetForCurrentCycle(context)
+        TimeCycleStore.markApplying(context)
         TimeCycleStore.addEvent(context, "Главный цикл $seriesIndex из $seriesTotal, повтор $repeatIndex из $repeats.")
         commandInFlight = true
         TimeShizukuController.applyTime(context, targetMillis) { outcome ->
@@ -80,13 +103,15 @@ object TimeShizukuCycleRunner {
 
             val betweenSeries = TimeCycleStore.isBetweenSeriesPause(context)
             val pauseMillis = TimeCycleStore.pauseBeforeNextMillis(context)
+            val dueElapsed = appliedElapsed + pauseMillis
+            TimeCycleStore.setWaitingUntil(context, dueElapsed)
             val pauseSeconds = pauseMillis / 1000L
             if (betweenSeries) {
                 TimeCycleStore.addEvent(context, "Пауза между главными циклами: $pauseSeconds сек.")
             } else {
                 TimeCycleStore.addEvent(context, "Пауза между повторами: $pauseSeconds сек.")
             }
-            scheduleAt(context, appliedElapsed + pauseMillis, expectedGeneration)
+            scheduleAt(context, dueElapsed, expectedGeneration)
         }
     }
 

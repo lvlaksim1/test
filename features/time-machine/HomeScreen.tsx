@@ -50,8 +50,11 @@ const initialStatus: TimeControlStatus = {
 export default function HomeScreen() {
   const colors = useColors();
   const scrollRef = useRef<ScrollView>(null);
+  const initialNativeStatusCapturedRef = useRef(false);
+  const lastAppliedSeenRef = useRef<number | null>(null);
   const [form, setForm] = useState<CycleForm>(() => getDefaultForm());
   const [status, setStatus] = useState<TimeControlStatus>(initialStatus);
+  const [hasNativeStatus, setHasNativeStatus] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [isLogExpanded, setIsLogExpanded] = useState(false);
   const [isConfigurationsExpanded, setIsConfigurationsExpanded] = useState(false);
@@ -62,7 +65,9 @@ export default function HomeScreen() {
 
   const refreshStatus = useCallback(async () => {
     try {
-      setStatus(await getTimeControlStatus());
+      const nextStatus = await getTimeControlStatus();
+      setStatus(nextStatus);
+      setHasNativeStatus(true);
     } catch {
       // Shizuku may be restarting.
     }
@@ -99,12 +104,19 @@ export default function HomeScreen() {
   }, [refreshStatus]);
 
   useEffect(() => {
-    if (!status.lastAppliedMillis) return;
+    if (!hasNativeStatus) return;
+    if (!initialNativeStatusCapturedRef.current) {
+      initialNativeStatusCapturedRef.current = true;
+      lastAppliedSeenRef.current = status.lastAppliedMillis;
+      return;
+    }
+    if (!status.lastAppliedMillis || status.lastAppliedMillis === lastAppliedSeenRef.current) return;
+    lastAppliedSeenRef.current = status.lastAppliedMillis;
     const appliedStart = toFormStart(status.lastAppliedMillis);
     persistForm((previous) => previous.date === appliedStart.date && previous.time === appliedStart.time
       ? previous
       : { ...previous, ...appliedStart });
-  }, [persistForm, status.lastAppliedMillis]);
+  }, [hasNativeStatus, persistForm, status.lastAppliedMillis]);
 
   const parsed = useMemo(() => parseCycleForm(form), [form]);
   const shizukuReady = status.isShizukuRunning && status.isShizukuPermissionGranted;

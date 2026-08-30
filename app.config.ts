@@ -3,7 +3,7 @@ import type { ExpoConfig } from "expo/config";
 const config: ExpoConfig = {
   name: "Машина времени",
   slug: "android-time-cycler",
-  version: "140",
+  version: "141",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: "timecycler",
@@ -20,7 +20,7 @@ const config: ExpoConfig = {
     predictiveBackGestureEnabled: false,
     softwareKeyboardLayoutMode: "resize",
     package: "com.app.androidtimecycler",
-    versionCode: 140,
+    versionCode: 141,
     permissions: ["POST_NOTIFICATIONS"],
   },
   plugins: [

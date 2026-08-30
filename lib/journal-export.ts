@@ -9,7 +9,7 @@ export function formatJournalForCopy(events: CycleEvent[]): string {
 
   const records = events
     .slice()
-    .sort((left, right) => right.at - left.at)
+    .reverse()
     .map((event) => `${new Date(event.at).toLocaleString("ru-RU")}\n${event.message}`);
 
   return [...header, ...(records.length ? records : ["Записей нет."])].join("\n\n");

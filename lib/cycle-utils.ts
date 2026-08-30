@@ -71,7 +71,7 @@ export function parseCycleForm(form: CycleForm): { config?: CycleConfig; error?:
     if (value < min || value > max) return { error: `Поле «${name}» должно быть в диапазоне ${min}–${max}.` };
     values.push(value);
   }
-  if (values[0] + values[1] + values[2] === 0) return { error: "Шаг изменения не может состоять только из нулей." };
+  if (values[0] === 0 && values[1] === 0 && values[2] === 0) return { error: "Шаг изменения не может состоять только из нулей." };
 
   const repeatsPerSeries = values[4];
   const totalSeries = values[6];

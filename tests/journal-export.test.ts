@@ -3,15 +3,13 @@ import { describe, expect, it } from "vitest";
 import { formatJournalForCopy } from "../lib/journal-export";
 
 describe("formatJournalForCopy", () => {
-  it("включает все записи и выводит новые события первыми", () => {
+  it("сохраняет фактический порядок событий даже если системное время шло назад", () => {
     const exported = formatJournalForCopy([
-      { at: 1_000, message: "Первая запись" },
-      { at: 2_000, message: "Диагностика выбора даты: полный текст" },
+      { at: 3_000, message: "Первая фактическая запись" },
+      { at: 1_000, message: "Вторая фактическая запись после перевода часов назад" },
     ]);
 
     expect(exported).toContain("Машина времени — журнал действий");
-    expect(exported).toContain("Первая запись");
-    expect(exported).toContain("Диагностика выбора даты: полный текст");
-    expect(exported.indexOf("Диагностика выбора даты")).toBeLessThan(exported.indexOf("Первая запись"));
+    expect(exported.indexOf("Вторая фактическая запись")).toBeLessThan(exported.indexOf("Первая фактическая запись"));
   });
 });

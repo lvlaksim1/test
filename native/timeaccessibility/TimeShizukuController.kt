@@ -23,15 +23,27 @@ data class ShizukuCommandOutcome(
 object TimeShizukuController {
     private const val REQUEST_CODE = 7201
     private const val SERVICE_TAG = "time-cycler-direct-time-v2"
-    private const val SERVICE_VERSION = 3
+    private const val SERVICE_VERSION = 4
     private const val SERVICE_PROCESS_SUFFIX = "timecycler"
 
     private val lock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val executor = Executors.newSingleThreadExecutor()
+    private val cancellationExecutor = Executors.newSingleThreadExecutor()
     private var remoteService: ITimeShizukuService? = null
     private var isBinding = false
     private var pendingRequest: Pair<(ITimeShizukuService) -> String, (ShizukuCommandOutcome) -> Unit>? = null
+    private var pendingPermissionCallback: ((Boolean) -> Unit)? = null
+    private var permissionListenerRegistered = false
+
+    private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
+        if (requestCode == REQUEST_CODE) {
+            val callback = synchronized(lock) {
+                pendingPermissionCallback.also { pendingPermissionCallback = null }
+            }
+            callback?.let { deliverPermission(it, grantResult == PackageManager.PERMISSION_GRANTED) }
+        }
+    }
 
     fun state(): ShizukuState {
         val running = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
@@ -41,15 +53,45 @@ object TimeShizukuController {
         return ShizukuState(running, granted)
     }
 
-    fun requestPermission(): Boolean {
+    fun requestPermission(callback: (Boolean) -> Unit) {
         val current = state()
-        if (!current.isRunning) return false
-        if (current.isPermissionGranted) return true
-        if (runCatching { Shizuku.shouldShowRequestPermissionRationale() }.getOrDefault(true)) return false
-        return runCatching {
-            Shizuku.requestPermission(REQUEST_CODE)
-            false
-        }.getOrDefault(false)
+        if (!current.isRunning) {
+            deliverPermission(callback, false)
+            return
+        }
+        if (current.isPermissionGranted) {
+            deliverPermission(callback, true)
+            return
+        }
+        if (runCatching { Shizuku.shouldShowRequestPermissionRationale() }.getOrDefault(true)) {
+            deliverPermission(callback, false)
+            return
+        }
+
+        var accepted = false
+        val setupSucceeded = runCatching {
+            synchronized(lock) {
+                if (pendingPermissionCallback == null) {
+                    if (!permissionListenerRegistered) {
+                        Shizuku.addRequestPermissionResultListener(permissionListener)
+                        permissionListenerRegistered = true
+                    }
+                    pendingPermissionCallback = callback
+                    accepted = true
+                }
+            }
+        }.isSuccess
+        if (!setupSucceeded || !accepted) {
+            deliverPermission(callback, false)
+            return
+        }
+        runCatching { Shizuku.requestPermission(REQUEST_CODE) }
+            .onFailure {
+                val failedCallback = synchronized(lock) {
+                    pendingPermissionCallback.also { pendingPermissionCallback = null }
+                }
+                failedCallback?.let { deliverPermission(it, false) }
+            }
     }
 
     fun applyTime(context: Context, targetMillis: Long, callback: (ShizukuCommandOutcome) -> Unit) {
@@ -58,6 +100,17 @@ object TimeShizukuController {
 
     fun setAutomaticTime(context: Context, enabled: Boolean, callback: (ShizukuCommandOutcome) -> Unit) {
         execute(context, { service -> service.setAutomaticTime(enabled) }, callback)
+    }
+
+    fun getAutomaticTime(context: Context, callback: (ShizukuCommandOutcome) -> Unit) {
+        execute(context, { service -> service.getAutomaticTime() }, callback)
+    }
+
+    fun cancelActiveCommand() {
+        val service = synchronized(lock) { remoteService } ?: return
+        cancellationExecutor.execute {
+            runCatching { service.cancelCurrentCommand() }
+        }
     }
 
     private fun execute(
@@ -146,5 +199,9 @@ object TimeShizukuController {
 
     private fun deliver(callback: (ShizukuCommandOutcome) -> Unit, outcome: ShizukuCommandOutcome) {
         mainHandler.post { callback(outcome) }
+    }
+
+    private fun deliverPermission(callback: (Boolean) -> Unit, granted: Boolean) {
+        mainHandler.post { callback(granted) }
     }
 }

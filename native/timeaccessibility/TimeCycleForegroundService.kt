@@ -7,7 +7,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
@@ -16,6 +18,7 @@ class TimeCycleForegroundService : Service() {
         private const val CHANNEL_ID = "time_cycle_active"
         private const val NOTIFICATION_ID = 7202
         private const val ACTION_START = "time_cycle_start"
+        private const val HEARTBEAT_INTERVAL_MILLIS = 5_000L
 
         fun start(context: Context) {
             val intent = Intent(context, TimeCycleForegroundService::class.java).setAction(ACTION_START)
@@ -27,19 +30,36 @@ class TimeCycleForegroundService : Service() {
         }
     }
 
+    private val heartbeatHandler = Handler(Looper.getMainLooper())
+    private val heartbeatTask = object : Runnable {
+        override fun run() {
+            TimeCycleStore.markServiceHeartbeat(applicationContext)
+            heartbeatHandler.postDelayed(this, HEARTBEAT_INTERVAL_MILLIS)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
+        TimeCycleStore.markServiceHeartbeat(applicationContext)
+        heartbeatHandler.postDelayed(heartbeatTask, HEARTBEAT_INTERVAL_MILLIS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!TimeCycleStore.isRunning(applicationContext)) {
+        if (!TimeCycleStore.validateRuntimeForService(applicationContext)) {
             stopSelf()
             return START_NOT_STICKY
         }
-        TimeShizukuCycleRunner.start(applicationContext)
+        TimeCycleStore.markServiceHeartbeat(applicationContext)
+        TimeShizukuCycleRunner.startOrResume(applicationContext)
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        heartbeatHandler.removeCallbacks(heartbeatTask)
+        TimeShizukuCycleRunner.stop()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
